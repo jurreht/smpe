@@ -24,7 +24,9 @@ def test_init_correct_n_players(n_players):
     DynamicGame(n_players, 1, .98)
 
 
-@given(st.integers(min_value=1), st.integers(min_value=1))
+@given(
+    st.integers(min_value=1, max_value=10),  # max_value to prevent slowness
+    st.integers(min_value=1))
 def test_init_int_n_actions(n_players, n_actions):
     """
     The constructor should accept an int as an argument to n_actions.
@@ -88,7 +90,9 @@ def test_init_n_actions_list_positive_el(n_actions):
     DynamicGame(len(n_actions), n_actions, .98)
 
 
-@given(st.integers(min_value=1), st.floats(min_value=0.01, max_value=0.99))
+@given(
+    st.integers(min_value=1, max_value=10),  # max_value to prevent slowness
+    st.floats(min_value=0.01, max_value=0.99))
 def test_init_beta_valid_float(n_players, beta):
     """
     The constructor should accept a single valid float as an argument for beta.

@@ -185,7 +185,21 @@ def test_chebyshev_nodes_stable_order():
 
 interpolation_tests = [
     (10, 2, np.array([0]), np.array([1]), lambda x: x),
-    (10, 2, np.array([0, 1]), np.array([1, 10]), lambda x, y: x - y**2)]
+    (10, 2, np.array([0, 1]), np.array([1, 10]), lambda x, y: x - y**2),
+    # The following 4 test cases are from Franke (1979), "A Critical
+    # Comparison of Some Methods for Interpolation of Scattered Data"
+    # (http://hdl.handle.net/10945/35052)
+    (100, 3, np.array([0, 0]), np.array([1, 1]),
+        lambda x, y: (1.25 + np.cos(5.4 * y)) / (6 * (1 + (3 * x - 1)**2))),
+    (100, 3, np.array([0, 0]), np.array([1, 1]),
+        lambda x, y: (np.tanh(9 * y - 9 * x) + 1) / 9),
+    (100, 3, np.array([0, 0]), np.array([1, 1]),
+        lambda x, y: np.exp(-81 * ((x - .5)**2 + (y - .5)**2 / 16)) / 3),
+    (100, 3, np.array([0, 0]), np.array([1, 1]),
+        lambda x, y: np.exp(-81 * ((x - .5)**2 + (y - .5)**2 / 4)) / 3),
+    (100, 3, np.array([0, 0]), np.array([1, 1]),
+        lambda x, y: np.sqrt(64 - 81 * ((x - .5)**2 + (y - .5)**2)) / 9 - .5)
+]
 
 
 @pytest.mark.parametrize(
@@ -203,7 +217,7 @@ def test_chebyshev_fit(nodes_per_state, degree, node_min, node_max, func):
         vals[i] = func(*node)
     approx.update(vals)
     approx_vals = np.array([approx(n) for n in approx.nodes()])
-    assert_allclose(approx_vals, vals)
+    assert np.linalg.norm(approx_vals - vals) / vals.shape[0] <= 1e-3
 
 
 @pytest.mark.parametrize(

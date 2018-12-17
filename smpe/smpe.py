@@ -1,4 +1,10 @@
+from numbers import Number
+import math
 from typing import Sequence, Union
+
+import dask.distributed
+
+import interpolation
 
 
 class DynamicGame:
@@ -10,7 +16,9 @@ class DynamicGame:
         self,
         n_players: int,
         n_actions: Union[Sequence[int], int],
-        beta: Union[Sequence[float], float]
+        beta: Union[Sequence[float], float],
+        cost_att: Union[Sequence[Number], Number],
+        dask_client: dask.distributed.Client = None
     ):
         if n_players < 1:
             raise ValueError('Number of players must be at least 1')
@@ -40,6 +48,37 @@ class DynamicGame:
                 raise ValueError(
                     'Provide a discount factor for every player')
             for x in beta:
-                if not 0 < x < 1:
+                if not 0 < x < 1 or math.isnan(x):
                     raise ValueError('Discount factor must be in (0, 1)')
         self.beta = beta
+
+        if isinstance(cost_att, Number):
+            if cost_att >= 0:
+                cost_att = [cost_att] * n_players
+            else:
+                raise ValueError('Cost of attention must be non-negative')
+        else:
+            if len(cost_att) != n_players:
+                raise ValueError(
+                    'Provide a cost of attention for every player')
+            for x in cost_att:
+                if x < 0 or math.isnan(x):
+                    raise ValueError('Cost of attention must be non-negative')
+        self.cost_att = cost_att
+
+        if dask_client is None:
+            # Use the standard multiprocessing client to run computations on
+            self._client = dask.distributed.Client()
+            self._close_client_on_del = True
+        else:
+            self._client = dask_client
+            self._close_client_on_del = False
+
+    def __del__(self):
+        try:
+            if self._close_client_on_del:
+                self._client.close()
+        except AttributeError:
+            # This can happen when an exception is raised before
+            # _close_client_on_del or _client are set
+            pass

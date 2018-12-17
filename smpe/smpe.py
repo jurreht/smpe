@@ -4,7 +4,7 @@ from typing import Sequence, Union
 
 import dask.distributed
 
-import interpolation
+from . import interpolation
 
 
 class DynamicGame:

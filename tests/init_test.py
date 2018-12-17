@@ -122,7 +122,8 @@ def test_init_dim_state_incorrect(dim_state, dask_client):
 
 
 @given(
-    n_players=st.integers(min_value=1, max_value=10),  # max_value to prevent slowness
+    # max_value to prevent slowness
+    n_players=st.integers(min_value=1, max_value=10),
     beta=st.floats(min_value=0.01, max_value=0.99))
 def test_init_beta_valid_float(n_players, beta, dask_client):
     """
@@ -188,11 +189,13 @@ def test_init_beta_incorrect_list(beta, dask_client):
 
 
 @given(
-    n_players=st.integers(min_value=1, max_value=10),  # max_value to prevent slowness
+    # max_value to prevent slowness
+    n_players=st.integers(min_value=1, max_value=10),
     cost_att=st.floats(min_value=0))
 def test_init_cost_att_valid_float(n_players, cost_att, dask_client):
     """
-    The constructor should accept a single valid float as an argument for cost_att.
+    The constructor should accept a single valid float as an
+    argument for cost_att.
     """
     game = DynamicGame(n_players, 1, 1, .98, cost_att, dask_client)
     assert isinstance(game.cost_att, typing.Sequence)

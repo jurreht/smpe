@@ -8,7 +8,7 @@ from smpe.smpe import DynamicGame
 
 
 class MockGame(DynamicGame):
-    def static_profits(self, player_ind, state):
+    def static_profits(self, player_ind, state, actions):
         pass
 
     def state_evolution(self, state, actions):

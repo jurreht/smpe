@@ -85,7 +85,7 @@ class DynamicGame(abc.ABC):
             pass
 
     @abc.abstractmethod
-    def static_profits(self, player_ind, state):
+    def static_profits(self, player_ind, state, actions):
         pass
 
     @abc.abstractmethod

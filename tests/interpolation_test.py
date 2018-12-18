@@ -222,7 +222,10 @@ def test_chebyshev_fit(nodes_per_state, degree, node_min, node_max, func):
 
 @pytest.mark.parametrize(
     'nodes_per_state, degree, node_min, node_max, func',
-    interpolation_tests
+    # Only use one test case to speed up testing. The correctness
+    # of the derivative should not depend on the particular function used,
+    # so this should not have any downsides
+    [interpolation_tests[2]]
 )
 def test_chebyshev_derivative(
     nodes_per_state, degree, node_min, node_max, func

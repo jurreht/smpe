@@ -16,7 +16,6 @@ class DynamicGame:
         self,
         n_players: int,
         n_actions: Union[Sequence[int], int],
-        dim_state: int,
         beta: Union[Sequence[float], float],
         cost_att: Union[Sequence[Number], Number],
         dask_client: dask.distributed.Client = None
@@ -38,10 +37,6 @@ class DynamicGame:
                 if x < 1:
                     raise ValueError('Number of actions must be at least 1')
         self.n_actions = n_actions
-
-        if dim_state < 1:
-            raise ValueError('Dimension of state must be at least 1')
-        self.dim_state = dim_state
 
         if isinstance(beta, float):
             if 0 < beta < 1:

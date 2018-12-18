@@ -247,3 +247,19 @@ def test_chebyshev_derivative(
             0,
             atol=1e-6
         )
+
+
+def test_chebyshev_share():
+    """
+    share() should generate an exacpt copy, where all elements except
+    for coefs are shared in memory with the original.
+    """
+    original = ChebyshevInterpolatedFunction(
+        3, 2, np.array([0]), np.array([1]))
+    copy = original.share()
+    for k in set(original.__dict__).union(copy.__dict__):
+        if k != 'coefs':
+            assert original.__dict__[k] is copy.__dict__[k]
+        else:
+            assert original.__dict__[k] is not copy.__dict__[k]
+            assert np.all(original.__dict__[k] == copy.__dict__[k])

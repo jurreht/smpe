@@ -25,7 +25,32 @@ class DifferentiableInterpolatedFuncion(InterpolatedFunction):
         pass
 
 
-class ChebyshevInterpolatedFunction(DifferentiableInterpolatedFuncion):
+class ShareableInterpolatedFunction(InterpolatedFunction):
+    @abc.abstractmethod
+    def share(self):
+        pass
+
+
+class MultivariateInterpolatedFunction:
+    def __init__(self, func: ShareableInterpolatedFunction, num_y: int):
+        self.vf = [func]
+        if num_y > 1:
+            for i in range(num_y - 1):
+                self.vf.append(func.share())
+
+    def nodes(self):
+        return self.vf[0].nodes()
+
+    def __getitem__(self, i):
+        return self.vf[i]
+
+    def __len__(self):
+        return len(self.vf)
+
+
+class ChebyshevInterpolatedFunction(
+    DifferentiableInterpolatedFuncion, ShareableInterpolatedFunction
+):
     def __init__(
         self, nodes_per_state, degree, node_min, node_max,
         complete=True
@@ -64,6 +89,22 @@ class ChebyshevInterpolatedFunction(DifferentiableInterpolatedFuncion):
 
         self.n_coefs = (degree + 1) ** self.dim_state
         self.coefs = np.zeros(self.n_coefs)
+
+    def share(self):
+        cls = type(self)
+        copy = cls.__new__(cls)
+        copy.degree = self.degree
+        copy.nodes_per_state = self.nodes_per_state
+        copy.node_min = self.node_min
+        copy.node_max = self.node_max
+        copy.dim_state = self.dim_state
+        copy.n_nodes = self.n_nodes
+        copy.complete = self.complete
+        copy.cheb_nodes = self.cheb_nodes
+        copy._nodes = self._nodes
+        copy.n_coefs = self.n_coefs
+        copy.coefs = np.copy(self.coefs)
+        return copy
 
     def __call__(self, x):
         x = np.array(x)

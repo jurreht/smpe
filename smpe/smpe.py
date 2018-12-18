@@ -1,3 +1,4 @@
+import abc
 from numbers import Number
 import math
 from typing import Sequence, Union
@@ -7,7 +8,7 @@ import dask.distributed
 from . import interpolation
 
 
-class DynamicGame:
+class DynamicGame(abc.ABC):
     n_players: int
     n_actions: Sequence[int]
     beta: Sequence[float]
@@ -82,3 +83,11 @@ class DynamicGame:
             # This can happen when an exception is raised before
             # _close_client_on_del or _client are set
             pass
+
+    @abc.abstractmethod
+    def static_profits(self, player_ind, state):
+        pass
+
+    @abc.abstractmethod
+    def state_evolution(self, state, actions):
+        pass

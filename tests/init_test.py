@@ -1,21 +1,10 @@
 import typing
 
-import dask.distributed
 from hypothesis import assume, given
 import hypothesis.strategies as st
 import pytest
 
 from smpe.smpe import DynamicGame
-
-
-@pytest.fixture(scope='module')
-def dask_client():
-    # Start one Dask session for all tests, and close it on shutdown
-    # This is more efficient than starting a Client every time a DynamicGame
-    # is instantiated.
-    client = dask.distributed.Client()
-    yield client
-    client.close()
 
 
 def test_init_incorrect_n_players(dask_client):

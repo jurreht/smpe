@@ -1,9 +1,12 @@
 import abc
+import functools
 from numbers import Number
 import math
 from typing import Sequence, Union
 
 import dask.distributed
+import numpy as np
+import scipy.optimize
 
 from . import interpolation
 
@@ -18,8 +21,7 @@ class DynamicGame(abc.ABC):
         n_players: int,
         n_actions: Union[Sequence[int], int],
         beta: Union[Sequence[float], float],
-        cost_att: Union[Sequence[Number], Number],
-        dask_client: dask.distributed.Client = None
+        cost_att: Union[Sequence[Number], Number]
     ):
         if n_players < 1:
             raise ValueError('Number of players must be at least 1')
@@ -66,23 +68,6 @@ class DynamicGame(abc.ABC):
                 if x < 0 or math.isnan(x):
                     raise ValueError('Cost of attention must be non-negative')
         self.cost_att = cost_att
-
-        if dask_client is None:
-            # Use the standard multiprocessing client to run computations on
-            self._client = dask.distributed.Client()
-            self._close_client_on_del = True
-        else:
-            self._client = dask_client
-            self._close_client_on_del = False
-
-    def __del__(self):
-        try:
-            if self._close_client_on_del:
-                self._client.close()
-        except AttributeError:
-            # This can happen when an exception is raised before
-            # _close_client_on_del or _client are set
-            pass
 
     @abc.abstractmethod
     def static_profits(self, player_ind, state, actions):

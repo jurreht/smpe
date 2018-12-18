@@ -72,9 +72,9 @@ def test_init_n_actions_list_length(n_players, n_actions, dask_client):
     """
     if len(n_actions) != n_players:
         with pytest.raises(ValueError):
-            DynamicGame(n_players, n_actions, .98, 0)
+            DynamicGame(n_players, n_actions, .98, 0, dask_client)
     else:
-        DynamicGame(n_players, n_actions, .98, 0)
+        DynamicGame(n_players, n_actions, .98, 0, dask_client)
 
 
 @given(n_actions=st.lists(

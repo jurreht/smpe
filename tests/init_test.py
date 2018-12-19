@@ -24,7 +24,8 @@ def test_init_incorrect_n_players():
         MockGame(0, 1, .98, 0)
 
 
-@given(n_players=st.integers(min_value=1))
+# max_value for speed
+@given(n_players=st.integers(min_value=1, max_value=20))
 def test_init_correct_n_players(n_players):
     """
     The constructor should accept any number of players >= 1.
@@ -232,3 +233,64 @@ def test_init_cost_att_incorrect_list(cost_att):
     assume(not all(x >= 0 for x in cost_att))
     with pytest.raises(ValueError):
         MockGame(len(cost_att), 1, .98, cost_att)
+
+
+@given(
+    n_players=st.integers(min_value=1, max_value=10),
+    n_actions=st.integers(min_value=1, max_value=10))
+def test_init_action_bounds_none(n_players, n_actions):
+    """
+    When no action bounds are given, the constructor must initialize default
+    bounds.
+    """
+    game = MockGame(n_players, n_actions, .98, 0)
+    assert len(game.action_bounds) == n_players
+    for bounds in game.action_bounds:
+        assert bounds == [(None, None)] * n_actions
+
+
+@given(
+    n_players=st.integers(min_value=1),
+    n_bounds=st.integers(min_value=1),
+    n_actions=st.integers(min_value=1, max_value=10))
+def test_init_action_bounds_wrong_number_players(
+    n_players, n_bounds, n_actions
+):
+    """
+    If no action bounds are provided for every player, the constructor
+    should raise an exception.
+    """
+    assume(n_players != n_bounds)
+    with pytest.raises(ValueError):
+        MockGame(
+            n_players, n_actions, .98, 0,
+            [[(None, None)] * n_actions] * n_bounds)
+
+
+@given(
+    n_players=st.integers(min_value=1),
+    n_actions=st.integers(min_value=1),
+    n_bounds_per_player=st.integers(min_value=1))
+def test_init_action_bounds_wrong_number_bounds(
+    n_players, n_actions, n_bounds_per_player
+):
+    """
+    The number of action bounds per player must equal the number of
+    actions. Otherwise, raise an exception.
+    """
+    assume(n_actions != n_bounds_per_player)
+    with pytest.raises(ValueError):
+        MockGame(
+            n_players, n_actions, .98, 0,
+            [[(None, None)] * n_bounds_per_player] * n_players)
+
+
+@given(
+    n_players=st.integers(min_value=1, max_value=10),
+    n_actions=st.integers(min_value=1, max_value=10))
+def test_init_action_bounds_correct(n_players, n_actions):
+    """
+    The constructor should raise no exceptions when correct action bounds are
+    given.
+    """
+    MockGame(n_players, n_actions, .98, 0, [[(0, 1)] * n_actions] * n_players)

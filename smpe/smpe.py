@@ -2,13 +2,16 @@ import abc
 import functools
 from numbers import Number
 import math
-from typing import Sequence, Union
+from typing import Sequence, Tuple, Union
 
 import dask.distributed
 import numpy as np
 import scipy.optimize
 
 from . import interpolation
+
+
+NullableFloat = Union[float, None]
 
 
 class DynamicGame(abc.ABC):
@@ -21,7 +24,8 @@ class DynamicGame(abc.ABC):
         n_players: int,
         n_actions: Union[Sequence[int], int],
         beta: Union[Sequence[float], float],
-        cost_att: Union[Sequence[Number], Number]
+        cost_att: Union[Sequence[Number], Number],
+        action_bounds: Sequence[Tuple[NullableFloat, NullableFloat]] = None
     ):
         if n_players < 1:
             raise ValueError('Number of players must be at least 1')
@@ -68,6 +72,19 @@ class DynamicGame(abc.ABC):
                 if x < 0 or math.isnan(x):
                     raise ValueError('Cost of attention must be non-negative')
         self.cost_att = cost_att
+
+        if action_bounds is None:
+            # Set default action bound
+            self.action_bounds = []
+            for i in range(self.n_players):
+                self.action_bounds.append([(None, None)] * self.n_actions[i])
+        else:
+            if len(action_bounds) != self.n_players:
+                raise ValueError('Provide action bounds for every player')
+            for i, bounds in enumerate(action_bounds):
+                if len(action_bounds[i]) != self.n_actions[i]:
+                    raise ValueError(
+                        f'Incorrect length of action bounds for player {i}')
 
     @abc.abstractmethod
     def static_profits(self, player_ind, state, actions):

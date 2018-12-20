@@ -60,6 +60,26 @@ def test_nodes_not_implemented():
         NodesNotImplementedMock()
 
 
+class NumpyNodesInterpolatedFunction(InterpolatedFunction):
+    def __call__(self, x):
+        pass
+
+    def update(self, values):
+        pass
+
+    def nodes(self):
+        yield [0., 0.]
+        yield [1., 2.]
+
+
+def test_numpy_nodes():
+    """
+    numpy_nodes() should return a Numpy array of all the nodes.
+    """
+    func = NumpyNodesInterpolatedFunction()
+    assert np.all(func.numpy_nodes() == np.array([[0., 0.], [1., 2.]]))
+
+
 class DerivativeNotImplementedMock(DifferentiableInterpolatedFuncion):
     def __call__(self, x):
         pass

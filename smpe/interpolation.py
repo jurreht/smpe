@@ -18,6 +18,9 @@ class InterpolatedFunction(abc.ABC):
     def update(self, values):
         pass
 
+    def numpy_nodes(self):
+        return np.array(list(iter(self.nodes())))
+
 
 class DifferentiableInterpolatedFuncion(InterpolatedFunction):
     @abc.abstractmethod

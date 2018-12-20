@@ -44,6 +44,9 @@ class MultivariateInterpolatedFunction:
     def nodes(self):
         return self.vf[0].nodes()
 
+    def numpy_nodes(self):
+        return self.vf[0].numpy_nodes()
+
     def __getitem__(self, i):
         return self.vf[i]
 

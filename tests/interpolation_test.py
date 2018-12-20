@@ -19,6 +19,9 @@ class CallNotImplementedMock(InterpolatedFunction):
     def nodes(self):
         pass
 
+    def num_nodes(self):
+        pass
+
 
 def test_call_not_implemented():
     """
@@ -33,6 +36,9 @@ class UpdateNotImplementedMock(InterpolatedFunction):
         pass
 
     def nodes(self):
+        pass
+
+    def num_nodes(self):
         pass
 
 
@@ -51,6 +57,9 @@ class NodesNotImplementedMock(InterpolatedFunction):
     def update(self, values):
         pass
 
+    def num_nodes(self):
+        pass
+
 
 def test_nodes_not_implemented():
     """
@@ -58,6 +67,25 @@ def test_nodes_not_implemented():
     """
     with pytest.raises(TypeError):
         NodesNotImplementedMock()
+
+
+class NumNodesNotImplementedMock(InterpolatedFunction):
+    def __call__(self, x):
+        pass
+
+    def update(self, values):
+        pass
+
+    def nodes(self):
+        pass
+
+
+def test_num_nodes_not_implemented():
+    """
+    Subclasses of InterpolatedFunction must implement num_nodes().
+    """
+    with pytest.raises(TypeError):
+        NumNodesNotImplementedMock()
 
 
 class NumpyNodesInterpolatedFunction(InterpolatedFunction):
@@ -70,6 +98,9 @@ class NumpyNodesInterpolatedFunction(InterpolatedFunction):
     def nodes(self):
         yield [0., 0.]
         yield [1., 2.]
+
+    def num_nodes(self):
+        pass
 
 
 def test_numpy_nodes():
@@ -220,6 +251,16 @@ interpolation_tests = [
     (100, 3, np.array([0, 0]), np.array([1, 1]),
         lambda x, y: np.sqrt(64 - 81 * ((x - .5)**2 + (y - .5)**2)) / 9 - .5)
 ]
+
+
+@given(
+    nodes_per_state=st.integers(min_value=2, max_value=5),
+    n_states=st.integers(min_value=1, max_value=4)
+)
+def test_chebyshev_num_nodes(nodes_per_state, n_states):
+    func = ChebyshevInterpolatedFunction(
+        nodes_per_state, 1, np.zeros(n_states), np.ones(n_states))
+    assert func.num_nodes() == nodes_per_state**n_states
 
 
 @pytest.mark.parametrize(

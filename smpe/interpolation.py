@@ -18,6 +18,10 @@ class InterpolatedFunction(abc.ABC):
     def update(self, values):
         pass
 
+    @abc.abstractmethod
+    def num_nodes(self):
+        pass
+
     def numpy_nodes(self):
         return np.array(list(iter(self.nodes())))
 
@@ -43,6 +47,9 @@ class MultivariateInterpolatedFunction:
 
     def nodes(self):
         return self.vf[0].nodes()
+
+    def num_nodes(self):
+        return self.vf[0].num_nodes()
 
     def numpy_nodes(self):
         return self.vf[0].numpy_nodes()
@@ -126,6 +133,9 @@ class ChebyshevInterpolatedFunction(
 
     def nodes(self):
         return itertools.product(*self._nodes)
+
+    def num_nodes(self):
+        return self.n_nodes
 
     def chebyshev_nodes(self):
         return itertools.product(self.cheb_nodes, repeat=self.dim_state)

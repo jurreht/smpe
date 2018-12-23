@@ -141,7 +141,7 @@ def test_chebyshev_nodes_per_state_check(nodes_per_state):
     if nodes_per_state < 1:
         with pytest.raises(ValueError):
             ChebyshevInterpolatedFunction(
-                nodes_per_state, nodes_per_state - 1,
+                nodes_per_state, max(nodes_per_state - 1, 1),
                 np.zeros(3), np.ones(3))
     else:
         ChebyshevInterpolatedFunction(

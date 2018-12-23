@@ -8,7 +8,7 @@ import pytest
 import scipy.optimize
 
 from smpe.interpolation import (InterpolatedFunction,
-                                DifferentiableInterpolatedFuncion,
+                                DifferentiableInterpolatedFunction,
                                 ChebyshevInterpolatedFunction)
 
 
@@ -111,7 +111,7 @@ def test_numpy_nodes():
     assert np.all(func.numpy_nodes() == np.array([[0., 0.], [1., 2.]]))
 
 
-class DerivativeNotImplementedMock(DifferentiableInterpolatedFuncion):
+class DerivativeNotImplementedMock(DifferentiableInterpolatedFunction):
     def __call__(self, x):
         pass
 

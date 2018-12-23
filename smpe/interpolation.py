@@ -26,7 +26,7 @@ class InterpolatedFunction(abc.ABC):
         return np.array(list(iter(self.nodes())))
 
 
-class DifferentiableInterpolatedFuncion(InterpolatedFunction):
+class DifferentiableInterpolatedFunction(InterpolatedFunction):
     @abc.abstractmethod
     def derivative(self, x):
         pass
@@ -62,7 +62,7 @@ class MultivariateInterpolatedFunction:
 
 
 class ChebyshevInterpolatedFunction(
-    DifferentiableInterpolatedFuncion, ShareableInterpolatedFunction
+    DifferentiableInterpolatedFunction, ShareableInterpolatedFunction
 ):
     def __init__(
         self, nodes_per_state, degree, node_min, node_max,

@@ -138,14 +138,15 @@ def test_chebyshev_nodes_per_state_check(nodes_per_state):
     THe Chebyshev constructor must raise an error if the nodes per state
     is not >= 1, otherwise not.
     """
+    degree = max(nodes_per_state - 1, 1)
     if nodes_per_state < 1:
         with pytest.raises(ValueError):
             ChebyshevInterpolatedFunction(
-                nodes_per_state, max(nodes_per_state - 1, 1),
+                nodes_per_state, degree,
                 np.zeros(3), np.ones(3))
     else:
         ChebyshevInterpolatedFunction(
-            nodes_per_state, nodes_per_state - 1,
+            nodes_per_state, degree,
             np.zeros(3), np.ones(3))
 
 

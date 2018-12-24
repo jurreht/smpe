@@ -4,3 +4,4 @@ hypothesis >= 3.82.0
 bokeh >= 1.0.0
 pycodestyle
 pytest-profiling
+graphviz

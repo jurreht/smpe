@@ -36,7 +36,7 @@ def test_init_correct_n_players(n_players):
 @given(
     # max_value to prevent slowness
     n_players=st.integers(min_value=1, max_value=10),
-    n_actions=st.integers(min_value=1))
+    n_actions=st.integers(min_value=1, max_value=10))
 def test_init_int_n_actions(n_players, n_actions):
     """
     The constructor should accept an int as an argument to n_actions.
@@ -61,7 +61,7 @@ def test_init_incorrect_int_n_actions(n_players, n_actions):
 
 @given(
     n_players=st.integers(min_value=1),
-    n_actions=st.lists(elements=st.integers(min_value=1)))
+    n_actions=st.lists(elements=st.integers(min_value=1, max_value=10)))
 def test_init_n_actions_list_length(n_players, n_actions):
     """
     The constructor should raise an expection when the size of the
@@ -89,7 +89,7 @@ def test_init_n_actions_list_negative_el(n_actions):
 
 
 @given(n_actions=st.lists(
-    elements=st.integers(min_value=1),
+    elements=st.integers(min_value=1, max_value=10),
     min_size=1
 ))
 def test_init_n_actions_list_positive_el(n_actions):
@@ -127,7 +127,7 @@ def test_init_beta_invalid_float(beta):
 
 
 @given(
-    n_players=st.integers(min_value=1),
+    n_players=st.integers(min_value=1, max_value=10),
     beta=st.lists(st.floats(min_value=0.01, max_value=0.99))
 )
 def test_init_beta_length(n_players, beta):
@@ -195,7 +195,7 @@ def test_init_cost_att_invalid_float(cost_att):
 
 
 @given(
-    n_players=st.integers(min_value=1),
+    n_players=st.integers(min_value=1, max_value=10),
     cost_att=st.lists(st.floats(min_value=0))
 )
 def test_init_cost_att_length(n_players, cost_att):
@@ -250,8 +250,8 @@ def test_init_action_bounds_none(n_players, n_actions):
 
 
 @given(
-    n_players=st.integers(min_value=1),
-    n_bounds=st.integers(min_value=1),
+    n_players=st.integers(min_value=1, max_value=10),
+    n_bounds=st.integers(min_value=1, max_value=10),
     n_actions=st.integers(min_value=1, max_value=10))
 def test_init_action_bounds_wrong_number_players(
     n_players, n_bounds, n_actions
@@ -268,9 +268,9 @@ def test_init_action_bounds_wrong_number_players(
 
 
 @given(
-    n_players=st.integers(min_value=1),
-    n_actions=st.integers(min_value=1),
-    n_bounds_per_player=st.integers(min_value=1))
+    n_players=st.integers(min_value=1, max_value=10),
+    n_actions=st.integers(min_value=1, max_value=10),
+    n_bounds_per_player=st.integers(min_value=1, max_value=10))
 def test_init_action_bounds_wrong_number_bounds(
     n_players, n_actions, n_bounds_per_player
 ):

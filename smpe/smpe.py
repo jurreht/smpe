@@ -71,6 +71,14 @@ class DynamicGame(abc.ABC):
             for x in cost_att:
                 if x < 0 or math.isnan(x):
                     raise ValueError('Cost of attention must be non-negative')
+        if any(cost > 0 for cost in cost_att) and (
+            not hasattr(self, 'sparse_state') or
+            not callable(self.sparse_state)
+        ):
+            raise ValueError(
+                'When the cost of attention is non-negative, a DynamicGame'
+                'subclass must implement the sparse_state() method.')
+
         self.cost_att = cost_att
 
         if action_bounds is None:

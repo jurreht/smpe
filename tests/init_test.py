@@ -14,6 +14,9 @@ class MockGame(DynamicGame):
     def state_evolution(self, state, actions):
         pass
 
+    def sparse_state(self, state, attention):
+        pass
+
 
 def test_init_incorrect_n_players():
     """
@@ -233,6 +236,29 @@ def test_init_cost_att_incorrect_list(cost_att):
     assume(not all(x >= 0 for x in cost_att))
     with pytest.raises(ValueError):
         MockGame(len(cost_att), 1, .98, cost_att)
+
+
+class MockGameNoSparseStateMethod(DynamicGame):
+    def static_profits(self, player_ind, state, actions):
+        pass
+
+    def state_evolution(self, state, actions):
+        pass
+
+
+@given(cost_att=st.lists(
+    elements=st.floats(min_value=0),
+    min_size=1
+))
+def test_init_cost_att_sparse_method_not_impl(cost_att):
+    """
+    When cost_att is non-zero for at least one player, the sublcass of
+    DynamicGame must implement the sparse_state() method. If not, the
+    constructor should raise an error.
+    """
+    assume(not all(c == 0 for c in cost_att))
+    with pytest.raises(ValueError):
+        MockGameNoSparseStateMethod(len(cost_att), 1, .98, cost_att)
 
 
 @given(

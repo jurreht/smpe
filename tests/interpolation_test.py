@@ -132,14 +132,14 @@ def test_derivative_not_implemented():
 
 
 # low max_value to speed up the test
-@given(st.integers(max_value=3))
+@given(st.integers(max_value=4))
 def test_chebyshev_nodes_per_state_check(nodes_per_state):
     """
     THe Chebyshev constructor must raise an error if the nodes per state
-    is not >= 1, otherwise not.
+    is not >= 2, otherwise not.
     """
-    degree = max(nodes_per_state - 1, 1)
-    if nodes_per_state < 1:
+    degree = nodes_per_state - 1
+    if nodes_per_state < 2:
         with pytest.raises(ValueError):
             ChebyshevInterpolatedFunction(
                 nodes_per_state, degree,

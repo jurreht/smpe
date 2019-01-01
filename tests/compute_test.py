@@ -57,9 +57,9 @@ class CapitalAccumulationProblem(DynamicGameDifferentiable):
         return [1.]
 
     def compute_action_bounds(
-        self, state, player_ind, value_functions, actions_others
+        self, state, player_ind, value_function, actions_others
     ):
-        return [(value_functions[0]._nodes[0, 0], state[0]**self.alpha)]
+        return [(value_function._nodes[0, 0], state[0]**self.alpha)]
 
     def compute_optimization_x0(
         self, state, player_ind, value_functions, actions_others, prev_optimal

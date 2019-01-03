@@ -103,6 +103,14 @@ class DynamicGame(abc.ABC):
         if len(value_functions) != self.n_players:
             raise ValueError('Provide a value function for every player')
 
+        if (any(cost > 0 for cost in self.cost_att) and
+            not isinstance(value_functions.vf[0],
+                           interpolation.DifferentiableInterpolatedFunction)):
+            raise ValueError(
+                'Can only calculate sparsity for differentiable value'
+                'functions'
+            )
+
         dask_nodes = dask.array.from_array(
             value_functions.numpy_nodes(),
             (chunk_size, self._dim_state(value_functions)))

@@ -4,6 +4,7 @@ import pytest
 
 from smpe.interpolation import (
     MultivariateInterpolatedFunction,
+    ShareableInterpolatedFunction,
     ChebyshevInterpolatedFunction
 )
 from smpe.smpe import (DynamicGame,
@@ -17,6 +18,9 @@ class MockGame(DynamicGame):
     def state_evolution(self, state, actions):
         pass
 
+    def sparse_state(self, state, attention):
+        pass
+
 
 def test_compute_value_functions_wrong_length():
     """
@@ -28,6 +32,37 @@ def test_compute_value_functions_wrong_length():
         ChebyshevInterpolatedFunction(10, 2, np.zeros(1), np.ones(1)),
         2
     )
+    with pytest.raises(ValueError):
+        game.compute(vf)
+
+
+class NotDifferentiableValueFunction(ShareableInterpolatedFunction):
+    def nodes(self):
+        pass
+
+    def __call__(self, x):
+        pass
+
+    def update(self, values):
+        pass
+
+    def num_nodes(self):
+        pass
+
+    def share(self):
+        return type(self)()
+
+
+def test_compute_cost_att_not_differentiable():
+    """
+    compute() should raise an exception when att_cost > 0 for any player
+    and the value function provided is not differentiable.
+    """
+    game = MockGame(2, 1, .98, [0, .5])
+    vf = MultivariateInterpolatedFunction(
+        NotDifferentiableValueFunction(), 2
+    )
+
     with pytest.raises(ValueError):
         game.compute(vf)
 

@@ -100,7 +100,7 @@ class DynamicGame(abc.ABC):
         eps=1e-4,
         chunk_size=50
     ):
-        if len(value_functions) != self.n_players:
+        if len(value_functions.vf) != self.n_players:
             raise ValueError('Provide a value function for every player')
 
         if (any(cost > 0 for cost in self.cost_att) and
@@ -111,21 +111,35 @@ class DynamicGame(abc.ABC):
                 'functions'
             )
 
-        dask_nodes = dask.array.from_array(
-            value_functions.numpy_nodes(),
-            (chunk_size, self._dim_state(value_functions)))
-        dask_nodes = dask_nodes.persist()
+        # Players may have different numbers of actions. Allocate the maximum
+        # number of actions amongst all of them for every player. This might
+        # be wasteful when the number of actions is very asymmetric, but in the
+        # more common case that every agent has the same number of actions we
+        # gain a lot of effiency since we can pass around a NumPy array instead
+        # of a Python list containing NumPy arrays.
+        max_actions = np.max(self.n_actions)
+        init_actions = dask.array.from_array(
+            np.zeros((value_functions.shape[0], self.n_players * max_actions)),
+            (chunk_size, -1)
+        )
+
+        # Combine the nodes and the (flattened) actions into one array.
+        # A line is a combintion of a node and the actions players use in
+        # that node. Combine them into one so that the node and the related
+        # actions are always in the same chunk, so that we can map_blocks()
+        # over it efficiently.
+        nodes = dask.array.from_array(value_functions, (chunk_size, -1))
+        lines = dask.array.concatenate((nodes, init_actions), axis=1)
+        lines = lines.rechunk((chunk_size, -1))
+        lines = lines.persist()
 
         converged = [False] * self.n_players
         prev_value_function = [None] * self.n_players
-        optimal_actions = [None] * self.n_players
+        prev_optimal = [False] * self.n_players
         while not all(converged):
             for i in range(self.n_players):
-                actions_others = (optimal_actions[:i] +
-                                  optimal_actions[i + 1:])
-                optimal_actions[i], calc_value_function = self._inner_loop(
-                    dask_nodes, i, value_functions, actions_others, eps,
-                    chunk_size, optimal_actions[i]
+                lines, calc_value_function = self._inner_loop(
+                    lines, i, value_functions, eps, chunk_size, prev_optimal[i]
                 )
 
                 if prev_value_function[i] is not None:
@@ -140,26 +154,42 @@ class DynamicGame(abc.ABC):
                         # actions calculated for other players are optimal.
                         converged = [False] * self.n_players
 
+                prev_optimal[i] = True
+
                 prev_value_function[i] = calc_value_function
 
+        lines = lines.compute()
+        optimal_actions = [
+            np.zeros((nodes.shape[0], self.n_actions[i]))
+            for i in range(self.n_players)]
+        for i in range(nodes.shape[0]):
+            _, actions = self._from_line(lines[i])
+            for j in range(self.n_players):
+                optimal_actions[j][i] = actions[j]
         return dask.compute(*optimal_actions)
 
-    def _dim_state(self, value_functions):
-        for x in value_functions.nodes():
-            return len(x)
+    def _to_line(self, node, actions):
+        return np.concatenate((
+            node, actions.flatten()
+        ))
+
+    def _from_line(self, line):
+        max_n_actions = np.max(self.n_actions)
+        n_actions = self.n_players * max_n_actions
+        node = line[:-n_actions]
+        actions = line[-n_actions:].reshape((self.n_players, max_n_actions))
+        return node, actions
 
     def _inner_loop(
-        self, dask_nodes, player_ind, value_functions, actions_others, eps,
-        chunk_size, prev_optimal=None
+        self, lines, player_ind, value_functions, eps, chunk_size,
+        prev_optimal=False
     ):
         prev_value_function = None
         while True:
-            optimal_actions = self.optimal_actions(
-                dask_nodes, player_ind, value_functions, actions_others,
-                chunk_size, prev_optimal)
+            lines = self.optimal_actions(
+                lines, player_ind, value_functions, chunk_size, prev_optimal)
             calc_value_function = self.calculate_value_function(
-                dask_nodes, player_ind, value_functions, optimal_actions,
-                actions_others, eps)
+                lines, player_ind, value_functions, chunk_size, eps)
             if prev_value_function is not None:
                 vf_norm = self.value_function_norm(
                     calc_value_function, prev_value_function
@@ -167,48 +197,34 @@ class DynamicGame(abc.ABC):
                 if vf_norm <= eps:
                     break
             prev_value_function = calc_value_function
-            prev_optimal = optimal_actions
+            prev_optimal = True
 
-        return optimal_actions, calc_value_function
+        return lines, calc_value_function
 
     def optimal_actions(
-        self, dask_nodes, player_ind, value_functions, actions_others,
-        chunk_size, prev_optimal=None
+        self, lines, player_ind, value_functions, chunk_size, prev_optimal=None
     ):
-        if prev_optimal is None:
-            return dask.array.core.map_blocks(
-                self._optimal_action,
-                dask_nodes,
-                dtype=np.float_,
-                chunks=(chunk_size, self.n_actions[player_ind]),
-                player_ind=player_ind,
-                value_function=value_functions[player_ind],
-                actions_others=actions_others,
-                prev_optimal=None
-            ).persist()
-        else:
-            return dask.array.core.map_blocks(
-                self._optimal_action,
-                dask_nodes,
-                prev_optimal,
-                dtype=np.float_,
-                chunks=(chunk_size, self.n_actions[player_ind]),
-                player_ind=player_ind,
-                value_function=value_functions[player_ind],
-                actions_others=actions_others
-            ).persist()
+        return dask.array.core.map_blocks(
+            self._optimal_action,
+            lines,
+            dtype=lines.dtype,
+            player_ind=player_ind,
+            value_function=value_functions.vf[player_ind],
+            prev_optimal=None
+        ).persist()
 
-    def _optimal_action(
-        self, states, prev_optimal, player_ind, value_function,
-        actions_others
-    ):
-        ret = np.zeros((states.shape[0], self.n_actions[player_ind]))
-        for i in range(states.shape[0]):
-            state = states[i]
+    def _optimal_action(self, lines, prev_optimal, player_ind, value_function):
+        ret = np.zeros(lines.shape)
+        for i in range(lines.shape[0]):
+            state, actions = self._from_line(lines[i])
+            actions_others = np.delete(actions, player_ind, axis=0)
             prev = None if prev_optimal is None else prev_optimal[i]
-            ret[i] = self.calculate_optimal_action(
+            optimal_action = self.calculate_optimal_action(
                 state, prev, player_ind, value_function, actions_others
             )
+            actions = np.insert(
+                actions_others, player_ind, optimal_action, axis=0)
+            ret[i] = self._to_line(state, actions)
 
         return ret
 
@@ -241,67 +257,42 @@ class DynamicGame(abc.ABC):
             bounds=bounds
         )
 
-    def _actions(self, player_ind, actions_player, actions_others):
-        if isinstance(actions_player, np.ndarray):
-            actions_player = actions_player.tolist()
-        return (actions_others[:player_ind] +
-                [actions_player] +
-                actions_others[player_ind:])
-
-    def _value(
-        self, state, player_ind, value_function,
-        actions_player, actions_others
-    ):
-        actions = self._actions(player_ind, actions_player, actions_others)
+    def _value(self, state, player_ind, value_function, actions):
         next_state = self.state_evolution(state, actions)
         cont_value = value_function(next_state)
         return (self.static_profits(player_ind, state, actions) +
                 self.beta[player_ind] * cont_value)
 
-    def _neg_value(
-        self, state, player_ind, value_function, actions_others,
-        actions_player
-    ):
+    def _neg_value(self, state, player_ind, value_function, actions):
         return -1 * self._value(
-            state, player_ind, value_function, actions_player,
-            actions_others)
+            state, player_ind, value_function, actions)
 
-    def _value_from_blocks(
-        self, states, actions_player, player_ind, value_function,
-        actions_others
-    ):
-        ret = np.zeros((states.shape[0], 1))
-        for i in range(states.shape[0]):
-            ret[i] = self._value(
-                states[i], player_ind, value_function, actions_player[i],
-                actions_others)
+    def _value_from_blocks(self, lines, player_ind, value_function):
+        ret = np.zeros(lines.shape[0])
+        for i in range(lines.shape[0]):
+            state, actions = self._from_line(lines[i])
+            ret[i] = self._value(state, player_ind, value_function, actions)
         return ret
 
     def calculate_value_function(
-        self, dask_nodes, player_ind, value_functions, actions_player,
-        actions_others, eps
+        self, lines, player_ind, value_functions, chunk_size, eps
     ):
         # Because _value() is a lot faster than calculate_optimal_action(),
         # we use a larger chunk size here.
-        x_chunk = min(dask_nodes.shape[0], 1000)
-        actions_player = actions_player.rechunk((x_chunk, -1)).persist()
-        dask_nodes = dask_nodes.rechunk((x_chunk, -1)).persist()
+        x_chunk = min(lines.shape[0], chunk_size * 100)
+        lines = lines.rechunk((x_chunk, None)).persist()
 
         prev_value_function = None
         while True:
             calc_value_function = dask.array.core.map_blocks(
                 self._value_from_blocks,
-                dask_nodes,
-                actions_player,
-                dtype=np.float_,
-                chunks=(x_chunk, 1),
+                lines,
+                dtype=lines.dtype,
+                chunks=(lines.shape[0],),
+                drop_axis=1,
                 player_ind=player_ind,
-                value_function=value_functions[player_ind],
-                actions_others=actions_others
+                value_function=value_functions.vf[player_ind],
             ).compute()
-            # map_blocks() adds an extra dimension which .update() below
-            # cannot swallow => remove it
-            calc_value_function = calc_value_function[:, 0]
 
             if prev_value_function is not None:
                 vf_diff = self.value_function_norm(
@@ -309,7 +300,7 @@ class DynamicGame(abc.ABC):
                 if vf_diff <= eps:
                     break
             prev_value_function = calc_value_function
-            value_functions[player_ind].update(calc_value_function)
+            value_functions.vf[player_ind].update(calc_value_function)
 
         return calc_value_function
 
@@ -355,7 +346,7 @@ class DynamicGameDifferentiable(DynamicGame):
         **kwargs
     ):
         if not isinstance(
-            value_functions[0],
+            value_functions.vf[0],
             interpolation.DifferentiableInterpolatedFunction
         ):
             raise ValueError(
@@ -368,22 +359,16 @@ class DynamicGameDifferentiable(DynamicGame):
         self, state, player_ind, value_function, actions_others, x0, bounds
     ):
         return scipy.optimize.minimize(
-            functools.partial(
-                self._neg_value_deriv, state, player_ind, value_function,
-                actions_others),
+            lambda x: self._neg_value_deriv(
+                state, player_ind, value_function,
+                np.insert(actions_others, player_ind, x, axis=0)),
             x0,
             bounds=bounds,
             jac=True
         )
 
-    def _neg_value_deriv(
-        self, state, player_ind, value_function, actions_others,
-        actions_player
-    ):
-        val = self._neg_value(
-            state, player_ind, value_function, actions_others,
-            actions_player)
-        actions = self._actions(player_ind, actions_player, actions_others)
+    def _neg_value_deriv(self, state, player_ind, value_function, actions):
+        val = self._neg_value(state, player_ind, value_function, actions)
         next_state = self.state_evolution(state, actions)
         grad = -1 * self.static_profits_gradient(player_ind, state, actions)
         vf_grad = value_function.derivative(np.array(next_state))

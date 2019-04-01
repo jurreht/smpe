@@ -20,7 +20,11 @@ class CallNotImplementedMock(InterpolatedFunction):
     def nodes(self):
         pass
 
+    @property
     def num_nodes(self):
+        pass
+
+    def __getitem__(self, key):
         pass
 
 
@@ -39,7 +43,11 @@ class UpdateNotImplementedMock(InterpolatedFunction):
     def nodes(self):
         pass
 
+    @property
     def num_nodes(self):
+        pass
+
+    def __getitem__(self, key):
         pass
 
 
@@ -58,7 +66,11 @@ class NodesNotImplementedMock(InterpolatedFunction):
     def update(self, values):
         pass
 
+    @property
     def num_nodes(self):
+        pass
+
+    def __getitem__(self, key):
         pass
 
 
@@ -80,13 +92,69 @@ class NumNodesNotImplementedMock(InterpolatedFunction):
     def nodes(self):
         pass
 
+    def __getitem__(self, key):
+        pass
+
 
 def test_num_nodes_not_implemented():
     """
-    Subclasses of InterpolatedFunction must implement num_nodes().
+    Subclasses of InterpolatedFunction must implement .num_nodes.
     """
     with pytest.raises(TypeError):
         NumNodesNotImplementedMock()
+
+
+class DimStateNotImplementedMock(InterpolatedFunction):
+    def __call__(self, x):
+        pass
+
+    def update(self, values):
+        pass
+
+    def nodes(self):
+        pass
+
+    @property
+    def num_nodes(self):
+        pass
+
+    def __getitem__(self, key):
+        pass
+
+
+def test_dim_state_not_implemented():
+    """
+    Subclasses of InterpolatedFunction must implement .dim_state.
+    """
+    with pytest.raises(TypeError):
+        DimStateNotImplementedMock()
+
+
+class GetItemNotImplementedMock(InterpolatedFunction):
+    def __call__(self, x):
+        pass
+
+    def update(self, values):
+        pass
+
+    def nodes(self):
+        pass
+
+    @property
+    def num_nodes(self):
+        pass
+
+    @property
+    def dim_state(self):
+        pass
+
+
+def test_get_item_not_implemented():
+    """
+    Subclasses of InterpolatedFunction must implement __get_item__().
+    """
+    with pytest.raises(TypeError):
+        GetItemNotImplementedMock()
 
 
 class NumpyNodesInterpolatedFunction(InterpolatedFunction):
@@ -101,6 +169,13 @@ class NumpyNodesInterpolatedFunction(InterpolatedFunction):
         yield [1., 2.]
 
     def num_nodes(self):
+        pass
+
+    @property
+    def dim_state(self):
+        pass
+
+    def __getitem__(self, key):
         pass
 
 
@@ -295,6 +370,61 @@ def test_chebyshev_nodes_in_range(nodes_per_state, node_bounds):
         assert np.all(nodes[:, i] <= node_max[i])
 
 
+def test_chebyshev_getitem_int():
+    """
+    The ChebyshevInterpolatedFunction __getitem__() implementation must
+    return the i'th element of numpy_nodes() when passed i as a key.
+    """
+    func = ChebyshevInterpolatedFunction(4, 1, [-1, 0, 10], [1, 3, 20])
+    nodes = func.numpy_nodes()
+    for i in range(func.num_nodes):
+        assert np.all(func[i] == nodes[i])
+
+
+def slices(ir):
+    """
+    Returns a slice where all elements are within the index range `ir'.
+    """
+    return st.tuples(
+        st.one_of(st.none(), st.integers(min_value=-ir, max_value=ir - 1)),
+        st.one_of(st.none(), st.integers(min_value=-ir, max_value=ir - 1)),
+        st.one_of(
+            st.none(),
+            st.integers(min_value=-ir, max_value=-1),
+            st.integers(min_value=1, max_value=ir)
+        )).map(lambda x: slice(*x))
+
+
+@given(slices(64))
+def test_chebyshev_getitem_slice(ind):
+    """
+    The ChebyshevInterpolatedFunction __getitem__() implementation must
+    work with slice indices.
+    """
+    func = ChebyshevInterpolatedFunction(4, 1, [-1, 0, 10], [1, 3, 20])
+    nodes = func.numpy_nodes()
+    assert np.all(func[ind] == nodes[ind])
+
+
+def indices(ir):
+    """
+    Returns an index or slice where all elements are within the index range
+    `ir'.
+    """
+    return st.one_of(slices(ir), st.integers(min_value=-ir, max_value=ir - 1))
+
+
+@given(indices(64), indices(3))
+def test_chebyshev_getitem_numpy_slice(ind1, ind2):
+    """
+    The ChebyshevInterpolatedFunction __getitem__() implementation must
+    work with NumPy slices.
+    """
+    func = ChebyshevInterpolatedFunction(4, 1, [-1, 0, 10], [1, 3, 20])
+    nodes = func.numpy_nodes()
+    assert np.all(func[ind1, ind2] == nodes[ind1, ind2])
+
+
 interpolation_tests = [
     (10, 2, np.array([0]), np.array([1]), lambda x: x),
     (10, 2, np.array([0, 1]), np.array([1, 10]), lambda x, y: x - y**2),
@@ -321,7 +451,7 @@ interpolation_tests = [
 def test_chebyshev_num_nodes(nodes_per_state, n_states):
     func = ChebyshevInterpolatedFunction(
         nodes_per_state, 1, np.zeros(n_states), np.ones(n_states))
-    assert func.num_nodes() == nodes_per_state**n_states
+    assert func.num_nodes == nodes_per_state**n_states
 
 
 @pytest.mark.parametrize(

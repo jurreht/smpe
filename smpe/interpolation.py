@@ -1,5 +1,6 @@
 import abc
 import itertools
+import math
 
 import numba
 import numpy as np
@@ -18,12 +19,35 @@ class InterpolatedFunction(abc.ABC):
     def update(self, values):
         pass
 
+    @property
     @abc.abstractmethod
     def num_nodes(self):
         pass
 
+    @property
+    @abc.abstractmethod
+    def dim_state(self):
+        pass
+
+    @property
+    @abc.abstractmethod
+    def __getitem__(self, key):
+        pass
+
+    @property
+    def dtype(self):
+        # Always return double since the main purpose implementing the Numpy
+        # array interface is to interface with Dask. The nodes will be combined
+        # into a single array with actions anyway, the latter of which are
+        # always double.
+        return np.double
+
     def numpy_nodes(self):
         return np.array(list(iter(self.nodes())))
+
+    @property
+    def shape(self):
+        return (self.num_nodes, self.dim_state)
 
 
 class DifferentiableInterpolatedFunction(InterpolatedFunction):
@@ -56,17 +80,30 @@ class MultivariateInterpolatedFunction:
     def nodes(self):
         return self.vf[0].nodes()
 
+    @property
+    def dim_state(self):
+        return self.vf[0].dim_state
+
+    @property
     def num_nodes(self):
-        return self.vf[0].num_nodes()
+        return self.vf[0].num_nodes
 
     def numpy_nodes(self):
         return self.vf[0].numpy_nodes()
 
-    def __getitem__(self, i):
-        return self.vf[i]
+    @property
+    def shape(self):
+        return self.vf[0].shape
+
+    @property
+    def dtype(self):
+        return self.vf[0].dtype
+
+    def __getitem__(self, key):
+        return self.vf[0][key]
 
     def __len__(self):
-        return len(self.vf)
+        return len(self.vf[0])
 
 
 class ChebyshevInterpolatedFunction(
@@ -96,7 +133,7 @@ class ChebyshevInterpolatedFunction(
         self.node_min = node_min
         self.node_max = node_max
 
-        self.dim_state = len(node_min)
+        self._dim_state = len(node_min)
         self.n_nodes = nodes_per_state ** self.dim_state
         self.complete = complete
 
@@ -118,7 +155,7 @@ class ChebyshevInterpolatedFunction(
         copy.nodes_per_state = self.nodes_per_state
         copy.node_min = self.node_min
         copy.node_max = self.node_max
-        copy.dim_state = self.dim_state
+        copy._dim_state = self._dim_state
         copy.n_nodes = self.n_nodes
         copy.complete = self.complete
         copy.cheb_nodes = self.cheb_nodes
@@ -130,23 +167,114 @@ class ChebyshevInterpolatedFunction(
     def __call__(self, x):
         x = np.array(x)
         x = _cheby_normalize_state(
-            x, self.dim_state, self.node_min, self.node_max)
-        inds = np.zeros(self.dim_state, dtype=np.int_)
+            x, self._dim_state, self.node_min, self.node_max)
+        inds = np.zeros(self._dim_state, dtype=np.int_)
 
         pols = np.array([
             _cheby_cheby_pols(s, self.degree) for s in np.asarray(x)])
         return _cheby_call_opt(
-            self.dim_state, self.degree, self.complete, self.n_coefs,
+            self._dim_state, self.degree, self.complete, self.n_coefs,
             self.coefs, inds, pols)
 
     def nodes(self):
         return itertools.product(*self._nodes)
 
+    @property
     def num_nodes(self):
         return self.n_nodes
 
+    @property
+    def dim_state(self):
+        return self._dim_state
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._get_one_item(key, slice(None, None, None))
+        elif isinstance(key, slice):
+            return self._get_range_items(key, slice(None, None, None))
+        elif isinstance(key, tuple):
+            if isinstance(key[0], int):
+                return self._get_one_item(key[0], key[1])
+            elif isinstance(key[0], slice):
+                ret = self._get_range_items(key[0], key[1])
+
+                if isinstance(key[1], int):
+                    return ret[:, 0]
+                else:
+                    return ret
+            else:
+                raise TypeError()
+
+        else:
+            raise TypeError()
+
+    def _get_one_item(self, key, y_ind):
+        ret = np.empty(self._dim_state)
+        for i in range(self.dim_state):
+            ind = self._dim_state - i - 1
+            remainder = (
+                (key // self.nodes_per_state**i) %
+                self.nodes_per_state)
+            ret[ind] = self._nodes[ind, remainder]
+            key -= remainder
+        return ret[y_ind]
+
+    def _get_range_items(self, key, y_ind):
+        start, stop, step = self._slice_to_range(key, self.n_nodes)
+        x_els = math.ceil((stop - start) / step)
+
+        if isinstance(y_ind, int):
+            y_els = 1
+        else:
+            # Calculate the range of y_ind as well to allocate the right amount
+            # of memory
+            y_start, y_stop, y_step = self._slice_to_range(
+                y_ind, self._dim_state)
+            y_els = max(math.ceil((y_stop - y_start) / y_step), 0)
+
+        if x_els <= 0:
+            return np.zeros((0, y_els))
+
+        ret = np.empty((x_els, y_els))
+        for ind, i in enumerate(range(start, stop, step)):
+            ret[ind] = self._get_one_item(i, y_ind)
+        return ret
+
+    def _slice_to_range(self, key, max_el):
+        if key.start is None:
+            start = 0
+        elif key.start >= 0:
+            start = key.start
+        else:
+            start = max_el + key.start
+
+        if key.stop is None:
+            stop = max_el
+        elif key.stop >= 0:
+            stop = key.stop
+        else:
+            stop = max_el + key.stop
+
+        step = 1 if key.step is None else key.step
+
+        if step < 0:
+            if key.stop is None and key.start is not None:
+                stop = -1
+            elif key.start is None and key.stop is not None:
+                start = max_el - 1
+                if key.stop >= 0:
+                    stop = key.stop
+                else:
+                    stop = max_el + key.stop
+            elif key.start is None and key.stop is None:
+                start, stop = stop, start
+                stop -= 1
+                start -= 1
+
+        return start, stop, step
+
     def chebyshev_nodes(self):
-        return itertools.product(self.cheb_nodes, repeat=self.dim_state)
+        return itertools.product(self.cheb_nodes, repeat=self._dim_state)
 
     def update(self, values):
         coef_num = np.zeros(self.n_coefs)
@@ -155,11 +283,11 @@ class ChebyshevInterpolatedFunction(
             zip(self.nodes(), self.chebyshev_nodes())
         ):
             _cheby_update_step1(
-                self.dim_state, self.degree, self.complete,
+                self._dim_state, self.degree, self.complete,
                 self.n_coefs, node_ind, norm_node, coef_num, values)
 
         _cheby_update_step2(
-            self.nodes_per_state, self.dim_state, self.degree,
+            self.nodes_per_state, self._dim_state, self.degree,
             self.complete, self.n_coefs, self.cheb_nodes,
             coef_num, self.coefs)
 
@@ -167,27 +295,27 @@ class ChebyshevInterpolatedFunction(
         x = np.array(x)
         x = _cheby_normalize_state(
             x, self.dim_state, self.node_min, self.node_max)
-        inds = np.zeros(self.dim_state, dtype=np.int_)
+        inds = np.zeros(self._dim_state, dtype=np.int_)
 
         pols = np.array([_cheby_cheby_pols(s, self.degree) for s in x])
         pols_2nd = np.array([
             _cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
         return _cheby_derivative_opt(
-            self.dim_state, self.degree, self.complete, self.n_coefs,
+            self._dim_state, self.degree, self.complete, self.n_coefs,
             self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max)
 
     def second_derivative(self, x):
         x = np.array(x)
         x = _cheby_normalize_state(
-            x, self.dim_state, self.node_min, self.node_max
+            x, self._dim_state, self.node_min, self.node_max
         )
-        inds = np.zeros(self.dim_state, dtype=np.int_)
+        inds = np.zeros(self._dim_state, dtype=np.int_)
 
         pols = np.array([_cheby_cheby_pols(s, self.degree) for s in x])
         pols_2nd = np.array([
             _cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
         return _cheby_second_derivative_opt(
-            self.dim_state, self.degree, self.complete, self.n_coefs,
+            self._dim_state, self.degree, self.complete, self.n_coefs,
             self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max, x)
 
 

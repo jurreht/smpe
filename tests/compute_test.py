@@ -46,7 +46,15 @@ class NotDifferentiableValueFunction(ShareableInterpolatedFunction):
     def update(self, values):
         pass
 
+    @property
     def num_nodes(self):
+        pass
+
+    @property
+    def dim_state(self):
+        pass
+
+    def __getitem__(self, key):
         pass
 
     def share(self):
@@ -94,7 +102,8 @@ class CapitalAccumulationProblem(DynamicGameDifferentiable):
     def compute_action_bounds(
         self, state, player_ind, value_function, actions_others
     ):
-        return [(value_function._nodes[0, 0], state[0]**self.alpha)]
+        lower = next(iter(value_function.nodes()))[0]
+        return [(lower, state[0]**self.alpha)]
 
     def compute_optimization_x0(
         self, state, player_ind, value_functions, actions_others, prev_optimal
@@ -112,7 +121,7 @@ def test_compute_capital_accumulation(dask_client):
     """
     alpha = .5
     beta = .95
-    n_nodes = 100
+    n_nodes = 500
     game = CapitalAccumulationProblem(alpha, beta)
     k_steady_state = (alpha * beta)**(1 / (1 - alpha))
     cheb = ChebyshevInterpolatedFunction(
@@ -123,7 +132,7 @@ def test_compute_capital_accumulation(dask_client):
         cheb,
         1
     )
-    policy_calc = game.compute(vf, eps=0.0001, chunk_size=1)
+    policy_calc = game.compute(vf, eps=0.01)
     policy_exact = alpha * beta * vf.numpy_nodes()**alpha
     assert_allclose(
         policy_calc, policy_exact[np.newaxis], atol=1e-2, rtol=5e-1)

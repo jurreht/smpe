@@ -261,6 +261,40 @@ def test_chebyshev_nodes_stable_order():
     assert list(func.nodes()) == list(func.nodes())
 
 
+@st.composite
+def node_bounds(draw):
+    dim_state = draw(st.integers(min_value=1, max_value=3))
+    node_min = draw(st.lists(
+        st.floats(
+            allow_nan=False, allow_infinity=False,
+            # Bound values to prevent float overflow issues
+            min_value=-1000, max_value=1000
+        ), min_size=dim_state, max_size=dim_state))
+    node_max = []
+    for i in range(dim_state):
+        node_max.append(draw(st.floats(
+            min_value=node_min[i] + 1,
+            allow_nan=False, allow_infinity=False)))
+    return node_min, node_max
+
+
+@given(
+    node_bounds=node_bounds(),
+    nodes_per_state=st.integers(min_value=2, max_value=10)
+)
+def test_chebyshev_nodes_in_range(nodes_per_state, node_bounds):
+    """
+    ChebyshevInterpolatedFunction nodes must lie within the specified range.
+    """
+    node_min, node_max = node_bounds
+    func = ChebyshevInterpolatedFunction(
+        nodes_per_state, 1, node_min, node_max)
+    nodes = func.numpy_nodes()
+    for i in range(func.dim_state):
+        assert np.all(node_min[i] <= nodes[:, i])
+        assert np.all(nodes[:, i] <= node_max[i])
+
+
 interpolation_tests = [
     (10, 2, np.array([0]), np.array([1]), lambda x: x),
     (10, 2, np.array([0, 1]), np.array([1, 10]), lambda x, y: x - y**2),

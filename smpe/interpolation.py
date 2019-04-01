@@ -32,6 +32,14 @@ class DifferentiableInterpolatedFunction(InterpolatedFunction):
         pass
 
 
+class TwiceDifferentiableInterpolatedFunction(
+    DifferentiableInterpolatedFunction
+):
+    @abc.abstractmethod
+    def second_derivative(self, x):
+        pass
+
+
 class ShareableInterpolatedFunction(InterpolatedFunction):
     @abc.abstractmethod
     def share(self):
@@ -62,7 +70,7 @@ class MultivariateInterpolatedFunction:
 
 
 class ChebyshevInterpolatedFunction(
-    DifferentiableInterpolatedFunction, ShareableInterpolatedFunction
+    TwiceDifferentiableInterpolatedFunction, ShareableInterpolatedFunction
 ):
     def __init__(
         self, nodes_per_state, degree, node_min, node_max,
@@ -168,6 +176,20 @@ class ChebyshevInterpolatedFunction(
             self.dim_state, self.degree, self.complete, self.n_coefs,
             self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max)
 
+    def second_derivative(self, x):
+        x = np.array(x)
+        x = _cheby_normalize_state(
+            x, self.dim_state, self.node_min, self.node_max
+        )
+        inds = np.zeros(self.dim_state, dtype=np.int_)
+
+        pols = np.array([_cheby_cheby_pols(s, self.degree) for s in x])
+        pols_2nd = np.array([
+            _cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
+        return _cheby_second_derivative_opt(
+            self.dim_state, self.degree, self.complete, self.n_coefs,
+            self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max, x)
+
 
 #
 # The Numba functions starting with _cheby_* belong to the
@@ -236,6 +258,56 @@ def _cheby_derivative_opt(
         deriv[j] *= 2 / (node_max[j] - node_min[j])
 
     return deriv
+
+
+@numba.jit(cache=True, nopython=True)
+def _cheby_second_derivative_opt(
+    dim_state, degree, complete, n_coefs, coefs, inds, pols, pols_2nd,
+    node_min, node_max, x
+):
+    deriv2 = np.zeros((dim_state, dim_state))
+
+    for i in range(n_coefs):
+        if complete and np.sum(inds) > degree:
+            continue
+
+        ind = _cheby_coef_ind(inds, dim_state, degree)
+        add_deriv2 = np.full((dim_state, dim_state), coefs[ind])
+        for j in range(dim_state):
+            for k in range(dim_state):
+                for m in range(dim_state):
+                    n = inds[m]
+                    if m == j and m == k:
+                        if inds[m] <= 1:
+                            add_deriv2[j, k] = 0
+                        elif x[m] == 1:
+                            add_deriv2[j, k] *= (n**4 - n**2) / 3
+                        elif x[m] == -1:
+                            add_deriv2[j, k] *= ((-1)**n) * (n**4 - n**2) / 3
+                        else:
+                            add_deriv2[j, k] *= (
+                                n * ((n + 1) * pols[m][n] - pols_2nd[m][n]) /
+                                (x[m]**2 - 1))
+                    elif m == j or m == k:
+                        if inds[m] == 0:
+                            add_deriv2[j, k] = 0
+                        else:
+                            add_deriv2[j, k] *= n * pols_2nd[m][n - 1]
+                    else:
+                        add_deriv2[j, k] *= pols[m][n]
+        for j in range(dim_state):
+            for k in range(dim_state):
+                deriv2[j, k] += add_deriv2[j, k]
+
+        _cheby_update_inds(inds, dim_state, degree)
+
+    # Chain rule: account for normalization of state variables
+    for j in range(dim_state):
+        for k in range(dim_state):
+            deriv2[j, k] *= 4 / ((node_max[j] - node_min[j]) *
+                                 (node_max[k] - node_min[k]))
+
+    return deriv2
 
 
 @numba.jit(cache=True, nopython=True)

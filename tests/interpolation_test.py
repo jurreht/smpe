@@ -9,6 +9,7 @@ import scipy.optimize
 
 from smpe.interpolation import (InterpolatedFunction,
                                 DifferentiableInterpolatedFunction,
+                                TwiceDifferentiableInterpolatedFunction,
                                 ChebyshevInterpolatedFunction)
 
 
@@ -129,6 +130,31 @@ def test_derivative_not_implemented():
     """
     with pytest.raises(TypeError):
         DerivativeNotImplementedMock()
+
+
+class SecondDerivativeNotImplementedMock(
+    TwiceDifferentiableInterpolatedFunction
+):
+    def __call__(self, x):
+        pass
+
+    def update(self, values):
+        pass
+
+    def nodes(self):
+        pass
+
+    def derivative(self, x):
+        pass
+
+
+def test_second_derivative_not_implemented():
+    """
+    Subclasses of TwiceDifferentiableInterpolatedFuncion must implement
+    second_derivative().
+    """
+    with pytest.raises(TypeError):
+        SecondDerivativeNotImplementedMock()
 
 
 # low max_value to speed up the test
@@ -306,6 +332,41 @@ def test_chebyshev_derivative(
             0,
             atol=1e-6
         )
+
+
+@pytest.mark.parametrize(
+    'nodes_per_state, degree, node_min, node_max, func',
+    interpolation_tests
+)
+def test_chebyshev_second_derivative(
+    nodes_per_state, degree, node_min, node_max, func
+):
+    """
+    The calculated second derivative of the Chebyshev should be close to a
+    numerically calculated one.
+    """
+    approx = ChebyshevInterpolatedFunction(
+        nodes_per_state, degree, node_min, node_max)
+    vals = np.zeros(approx.n_nodes)
+    for i, node in enumerate(approx.nodes()):
+        vals[i] = func(*node)
+    approx.update(vals)
+
+    dim_state = len(node_min)
+    for node in approx.nodes():
+        # Calculate the Hessian only once and use a constant Lambda function
+        # below for speed
+        hess = approx.second_derivative(node)
+        for i in range(dim_state):
+            assert_allclose(
+                scipy.optimize.check_grad(
+                    lambda x: approx.derivative(x)[i],
+                    lambda x: hess[i],
+                    node,
+                    epsilon=np.sqrt(np.finfo(float).eps)),
+                0,
+                atol=1e-6
+            )
 
 
 def test_chebyshev_share():

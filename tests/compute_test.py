@@ -132,7 +132,8 @@ def test_compute_capital_accumulation(dask_client):
         cheb,
         1
     )
-    policy_calc = game.compute(vf, eps=0.01)
+    policy_calc = game.compute(vf, eps=0.01, max_loop_inner=50,
+                               max_loop_outer=10)
     policy_exact = alpha * beta * vf.numpy_nodes()**alpha
     assert_allclose(
         policy_calc, policy_exact[np.newaxis], atol=1e-2, rtol=5e-1)

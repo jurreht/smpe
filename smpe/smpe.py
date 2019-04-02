@@ -14,6 +14,10 @@ from . import interpolation
 NullableFloat = Union[float, None]
 
 
+class ComputationLimitError(Exception):
+    pass
+
+
 class DynamicGame(abc.ABC):
     n_players: int
     n_actions: Sequence[int]
@@ -98,7 +102,9 @@ class DynamicGame(abc.ABC):
         self,
         value_functions: interpolation.MultivariateInterpolatedFunction,
         eps=1e-4,
-        chunk_size=50
+        chunk_size=50,
+        max_iter_outer=None,
+        max_iter_inner=None
     ):
         if len(value_functions.vf) != self.n_players:
             raise ValueError('Provide a value function for every player')
@@ -136,10 +142,12 @@ class DynamicGame(abc.ABC):
         converged = [False] * self.n_players
         prev_value_function = [None] * self.n_players
         prev_optimal = [False] * self.n_players
+        n_iters = 0
         while not all(converged):
             for i in range(self.n_players):
                 lines, calc_value_function = self._inner_loop(
-                    lines, i, value_functions, eps, chunk_size, prev_optimal[i]
+                    lines, i, value_functions, eps, chunk_size, prev_optimal[i],
+                    max_iter_inner
                 )
 
                 if prev_value_function[i] is not None:
@@ -157,6 +165,12 @@ class DynamicGame(abc.ABC):
                 prev_optimal[i] = True
 
                 prev_value_function[i] = calc_value_function
+
+            n_iters += 1
+            if max_iter_outer is not None and n_iters >= max_iter_outer:
+                raise ComputationLimitError(
+                    f'Maximum of {max_iter_outer} iterations in outer loop '
+                    'reached without convergence.')
 
         lines = lines.compute()
         optimal_actions = [
@@ -182,9 +196,10 @@ class DynamicGame(abc.ABC):
 
     def _inner_loop(
         self, lines, player_ind, value_functions, eps, chunk_size,
-        prev_optimal=False
+        prev_optimal=False, max_iter_inner=None
     ):
         prev_value_function = None
+        n_iters = 0
         while True:
             lines = self.optimal_actions(
                 lines, player_ind, value_functions, chunk_size, prev_optimal)
@@ -198,6 +213,13 @@ class DynamicGame(abc.ABC):
                     break
             prev_value_function = calc_value_function
             prev_optimal = True
+
+            n_iters += 1
+            if max_iter_inner is not None and n_iters >= max_iter_inner:
+                raise ComputationLimitError(
+                    f'Maximum of {max_iter_inner} iterations in inner loop '
+                    'reached without convergence.'
+                )
 
         return lines, calc_value_function
 

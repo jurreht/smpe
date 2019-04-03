@@ -140,16 +140,29 @@ class DynamicGame(abc.ABC):
         lines = lines.rechunk((chunk_size, -1))
         lines = lines.persist()
 
+        if x0 is not None:
+            # If starting actions are passed, initialize value actions
+            # from the values resulting from these actions.
+            prev_value_function = []
+            for i in range(self.n_players):
+                prev_value_function.append(
+                    self.calculate_value_function(lines, i, value_functions,
+                                                  chunk_size, eps)
+                )
+            prev_optimal = [True] * self.n_players
+        else:
+            prev_value_function = [None] * self.n_players
+            prev_optimal = [False] * self.n_players
+
         converged = [False] * self.n_players
-        prev_value_function = [None] * self.n_players
-        prev_optimal = [False] * self.n_players
         n_iters = 0
         while not all(converged):
             for i in range(self.n_players):
                 logging.info(f'Outer loop step for player {i}')
 
                 lines, calc_value_function = self._inner_loop(
-                    lines, i, value_functions, eps, chunk_size, prev_optimal[i],
+                    lines, i, value_functions, eps, chunk_size,
+                    prev_optimal[i], prev_value_function[i],
                     max_iter_inner
                 )
 
@@ -202,9 +215,8 @@ class DynamicGame(abc.ABC):
 
     def _inner_loop(
         self, lines, player_ind, value_functions, eps, chunk_size,
-        prev_optimal=False, max_iter_inner=None
+        prev_optimal=False, prev_value_function=None, max_iter_inner=None
     ):
-        prev_value_function = None
         n_iters = 0
         while True:
             lines = self.optimal_actions(

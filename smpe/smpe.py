@@ -155,7 +155,7 @@ class DynamicGame(abc.ABC):
 
                 if prev_value_function[i] is not None:
                     vf_norm = self.value_function_norm(
-                        calc_value_function, prev_value_function)
+                        calc_value_function, prev_value_function[i])
 
                     logging.info(f'Outer loop player {i}, step = {vf_norm}')
 

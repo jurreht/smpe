@@ -102,6 +102,7 @@ class DynamicGame(abc.ABC):
     def compute(
         self,
         value_functions: interpolation.MultivariateInterpolatedFunction,
+        x0=None,
         eps=1e-4,
         chunk_size=50,
         max_iter_outer=None,
@@ -125,10 +126,42 @@ class DynamicGame(abc.ABC):
         # gain a lot of effiency since we can pass around a NumPy array instead
         # of a Python list containing NumPy arrays.
         max_actions = np.max(self.n_actions)
-        init_actions = dask.array.from_array(
-            np.zeros((value_functions.shape[0], self.n_players * max_actions)),
-            (chunk_size, -1)
-        )
+        init_actions = np.zeros((value_functions.shape[0],
+                                 self.n_players * max_actions))
+        if isinstance(x0, Sequence):
+            if len(x0) != self.n_players:
+                raise ValueError('Provide initial actions for every player.')
+
+            if any(not isinstance(x0_i, np.ndarray) for x0_i in x0):
+                raise TypeError("Initial actions must be ndarray's")
+
+            if any(x0[i].shape[1] != self.n_actions[i]
+                   for i in range(self.n_players)):
+                raise ValueError('Provide the correct number of initial'
+                                 ' actions for every player.')
+
+            if any(x0_i.shape[0] != value_functions.shape[0] for x0_i in x0):
+                raise ValueError('Provide initial actions for every node.')
+
+            for i in range(self.n_players):
+                mi = i * max_actions
+                init_actions[:, mi:(mi + self.n_actions[i])] = x0[i]
+        elif isinstance(x0, np.ndarray):
+            if x0.shape[0] != value_functions.shape[0]:
+                raise ValueError('Provide initial actions for every node.')
+
+            if x0.shape[1] != self.n_players:
+                raise ValueError('Provide initial actions for every player.')
+
+            if x0.shape[2] != max_actions:
+                raise ValueError(f'Provide {max_actions} initial actions.')
+
+            for i in range(self.n_players):
+                mi = i * max_actions
+                init_actions[:, mi:(mi + max_actions)] = x0[:, i]
+        elif x0 is not None:
+            raise TypeError('x0 must be a sequence or ndarray.')
+        init_actions = dask.array.from_array(init_actions, (chunk_size, -1))
 
         # Combine the nodes and the (flattened) actions into one array.
         # A line is a combintion of a node and the actions players use in
@@ -374,13 +407,37 @@ class DynamicGame(abc.ABC):
         pass
 
 
+class ZeroValueFunction(interpolation.DifferentiableInterpolatedFunction):
+    def __init__(self, based_on):
+        first_state = next(iter(based_on.nodes()))
+        self._dim_state = len(first_state)
+        # Cache the derivative
+        self._deriv = np.zeros(self._dim_state)
+        self._based_on = based_on
+
+    def nodes(self):
+        return self._based_on.nodes()
+
+    def __call__(self, x):
+        return 0.
+
+    def update(self, values):
+        pass
+
+    def num_nodes(self):
+        return self._based_on.num_nodes()
+
+    def derivative(self, x):
+        return self._deriv
+
+
 class DynamicGameDifferentiable(DynamicGame):
     @abc.abstractclassmethod
     def static_profits_gradient(self, player_ind, state, actions):
         pass
 
     @abc.abstractclassmethod
-    def state_evolution_gradient(self, state, actions):
+    def state_evolution_gradient(self, player_ind, state, actions):
         pass
 
     def compute(
@@ -416,7 +473,7 @@ class DynamicGameDifferentiable(DynamicGame):
         next_state = self.state_evolution(state, actions)
         grad = -1 * self.static_profits_gradient(player_ind, state, actions)
         vf_grad = value_function.derivative(np.array(next_state))
-        evol_grad = np.array(self.state_evolution_gradient(state, actions))
+        evol_grad = self.state_evolution_gradient(player_ind, state, actions)
         grad -= self.beta[player_ind] * vf_grad @ evol_grad
 
         if self.n_actions[player_ind] == 1:

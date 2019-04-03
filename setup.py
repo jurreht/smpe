@@ -11,9 +11,10 @@ setup(
     'Perfect Equilibria of dynamic games',
     long_description=open('README.md').read(),
     install_requires=[
-        'dask >= 1.1.5',
+        'dask >= 1.0.0',
         'numpy >= 1.15.0',
         'scipy >= 1.2.0',
-        'numba >= 0.41'
+        'numba >= 0.41',
+        'xxhash >= 1.3.0'
     ]
 )

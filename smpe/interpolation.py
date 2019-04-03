@@ -4,6 +4,7 @@ import math
 
 import numba
 import numpy as np
+import xxhash
 
 
 class InterpolatedFunction(abc.ABC):
@@ -317,6 +318,18 @@ class ChebyshevInterpolatedFunction(
         return _cheby_second_derivative_opt(
             self._dim_state, self.degree, self.complete, self.n_coefs,
             self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max, x)
+
+    def __dask_tokenize__(self):
+        # If we do not implement this, Dask will see calls on the same
+        # value function (i.e. same object identity)
+        h = xxhash.xxh64()
+        h.update(bytes(self.degree))
+        h.update(self.node_min)
+        h.update(self.node_max)
+        h.update(bytes(self.n_nodes))
+        h.update(bytes(self.complete))
+        h.update(self.coefs)
+        return h.intdigest()
 
 
 #

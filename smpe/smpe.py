@@ -82,7 +82,7 @@ class DynamicGame(abc.ABC):
         ):
             raise ValueError(
                 'When the cost of attention is non-negative, a DynamicGame'
-                'subclass must implement the sparse_state() method.')
+                ' subclass must implement the sparse_state() method.')
         self.cost_att = cost_att
 
         if action_bounds is None:

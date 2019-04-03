@@ -272,9 +272,9 @@ class DynamicGame(abc.ABC):
         self, state, player_ind, value_functions, actions_others, x0, bounds
     ):
         return scipy.optimize.minimize(
-            functools.partial(
-                self._neg_value, state, player_ind, value_functions,
-                actions_others),
+            lambda x: self._neg_value(
+                state, player_ind, value_functions,
+                np.insert(actions_others, player_ind, x, axis=0)),
             x0,
             bounds=bounds
         )

@@ -1,5 +1,6 @@
 import abc
 import functools
+import logging
 from numbers import Number
 import math
 from typing import Sequence, Tuple, Union
@@ -145,6 +146,8 @@ class DynamicGame(abc.ABC):
         n_iters = 0
         while not all(converged):
             for i in range(self.n_players):
+                logging.info(f'Outer loop step for player {i}')
+
                 lines, calc_value_function = self._inner_loop(
                     lines, i, value_functions, eps, chunk_size, prev_optimal[i],
                     max_iter_inner
@@ -153,8 +156,11 @@ class DynamicGame(abc.ABC):
                 if prev_value_function[i] is not None:
                     vf_norm = self.value_function_norm(
                         calc_value_function, prev_value_function)
-                    print('outer: ', vf_norm)
+
+                    logging.info(f'Outer loop player {i}, step = {vf_norm}')
+
                     if vf_norm <= eps:
+                        logging.info(f'Outer loop player {i} converged')
                         converged[i] = True
                     else:
                         # The actions for one player have changed. As a
@@ -209,6 +215,9 @@ class DynamicGame(abc.ABC):
                 vf_norm = self.value_function_norm(
                     calc_value_function, prev_value_function
                 )
+
+                logging.info(f'Inner loop step {vf_norm}')
+
                 if vf_norm <= eps:
                     break
             prev_value_function = calc_value_function

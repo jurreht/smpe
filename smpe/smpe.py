@@ -180,7 +180,7 @@ class DynamicGame(abc.ABC):
             _, actions = self._from_line(lines[i])
             for j in range(self.n_players):
                 optimal_actions[j][i] = actions[j]
-        return dask.compute(*optimal_actions)
+        return optimal_actions
 
     def _to_line(self, node, actions):
         return np.concatenate((

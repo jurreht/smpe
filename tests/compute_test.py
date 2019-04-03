@@ -96,7 +96,7 @@ class CapitalAccumulationProblem(DynamicGameDifferentiable):
     def static_profits_gradient(self, player_ind, state, actions):
         return -1 / (state[0]**self.alpha - actions[0][0])
 
-    def state_evolution_gradient(self, state, actions):
+    def state_evolution_gradient(self, player_ind, state, actions):
         return [1.]
 
     def compute_action_bounds(
@@ -121,7 +121,7 @@ def test_compute_capital_accumulation(dask_client):
     """
     alpha = .5
     beta = .95
-    n_nodes = 500
+    n_nodes = 100
     game = CapitalAccumulationProblem(alpha, beta)
     k_steady_state = (alpha * beta)**(1 / (1 - alpha))
     cheb = ChebyshevInterpolatedFunction(
@@ -132,8 +132,8 @@ def test_compute_capital_accumulation(dask_client):
         cheb,
         1
     )
-    policy_calc = game.compute(vf, eps=0.01, max_loop_inner=50,
-                               max_loop_outer=10)
+    policy_calc = game.compute(vf, eps=0.01, max_iter_inner=50,
+                               max_iter_outer=10)
     policy_exact = alpha * beta * vf.numpy_nodes()**alpha
     assert_allclose(
         policy_calc, policy_exact[np.newaxis], atol=1e-2, rtol=5e-1)

@@ -124,14 +124,14 @@ class ChebyshevInterpolatedFunction(
                 'degree of a Chebyshev polynomial')
         self.nodes_per_state = nodes_per_state
 
-        if len(node_min) != len(node_max):
+        self.node_min = np.array(node_min)
+        self.node_max = np.array(node_max)
+        if len(self.node_min) != len(self.node_max):
             raise ValueError(
                 'The number of node lower bounds must be equal to the '
                 'number of node upper bounds')
-        if np.any(node_min >= node_max):
+        if np.any(self.node_min >= self.node_max):
             raise ValueError('Node lower bounds must be below upper bounds')
-        self.node_min = node_min
-        self.node_max = node_max
 
         self._dim_state = len(node_min)
         self.n_nodes = nodes_per_state ** self.dim_state

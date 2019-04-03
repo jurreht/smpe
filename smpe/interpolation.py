@@ -321,7 +321,7 @@ class ChebyshevInterpolatedFunction(
 
     def __dask_tokenize__(self):
         # If we do not implement this, Dask will see calls on the same
-        # value function (i.e. same object identity)
+        # value function (i.e. same object identity) as the same calls
         h = xxhash.xxh64()
         h.update(bytes(self.degree))
         h.update(self.node_min)

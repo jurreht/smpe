@@ -210,17 +210,6 @@ class CapitalAccumulationProblem(DynamicGameDifferentiable):
         else:
             return prev_optimal
 
-    def sparse_state(self, state, attention):
-        if attention[0] == 0:
-            return self._default_state
-        else:
-            return state
-
-    def compute(self, value_functions, *args, **kwargs):
-        nodes = value_functions.numpy_nodes()
-        self._default_state = nodes[nodes.shape[0] // 2]
-        return super().compute(value_functions, *args, **kwargs)
-
 
 def test_compute_capital_accumulation(dask_client):
     """

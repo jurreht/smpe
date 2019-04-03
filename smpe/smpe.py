@@ -315,14 +315,15 @@ class DynamicGame(abc.ABC):
                 player_ind=player_ind,
                 value_function=value_functions.vf[player_ind],
             ).compute()
+            value_functions.vf[player_ind].update(calc_value_function)
 
             if prev_value_function is not None:
                 vf_diff = self.value_function_norm(
                     calc_value_function, prev_value_function)
                 if vf_diff <= eps:
                     break
+
             prev_value_function = calc_value_function
-            value_functions.vf[player_ind].update(calc_value_function)
 
         return calc_value_function
 

@@ -1,5 +1,3 @@
-import typing
-
 from hypothesis import assume, given
 import hypothesis.strategies as st
 import pytest
@@ -45,7 +43,6 @@ def test_init_int_n_actions(n_players, n_actions):
     The constructor should accept an int as an argument to n_actions.
     """
     game = MockGame(n_players, n_actions, .98, 0)
-    assert isinstance(game.n_actions, typing.Sequence)
     assert len(game.n_actions) == n_players
     for x in game.n_actions:
         assert x == n_actions
@@ -112,7 +109,6 @@ def test_init_beta_valid_float(n_players, beta):
     The constructor should accept a single valid float as an argument for beta.
     """
     game = MockGame(n_players, 1, beta, 0)
-    assert isinstance(game.beta, typing.Sequence)
     assert len(game.beta) == n_players
     for x in game.beta:
         assert x == beta
@@ -180,7 +176,6 @@ def test_init_cost_att_valid_float(n_players, cost_att):
     argument for cost_att.
     """
     game = MockGame(n_players, 1, .98, cost_att)
-    assert isinstance(game.cost_att, typing.Sequence)
     assert len(game.cost_att) == n_players
     for x in game.cost_att:
         assert x == cost_att

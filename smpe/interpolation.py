@@ -71,12 +71,19 @@ class ShareableInterpolatedFunction(InterpolatedFunction):
         pass
 
 
-class MultivariateInterpolatedFunction:
-    def __init__(self, func: ShareableInterpolatedFunction, num_y: int):
+class DynamicGameInterpolatedFunctions:
+    def __init__(self, func: ShareableInterpolatedFunction, game):
         self.vf = [func]
-        if num_y > 1:
-            for i in range(num_y - 1):
+        if game.n_players > 1:
+            for i in range(game.n_players - 1):
                 self.vf.append(func.share())
+
+        self.pf = []
+        for i in range(game.n_players):
+            pfs = []
+            for j in range(game.n_actions[i]):
+                pfs.append(func.share())
+            self.pf.append(pfs)
 
     def nodes(self):
         return self.vf[0].nodes()

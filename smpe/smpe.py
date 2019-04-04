@@ -76,14 +76,7 @@ class DynamicGame(abc.ABC):
             for x in cost_att:
                 if x < 0 or math.isnan(x):
                     raise ValueError('Cost of attention must be non-negative')
-        if any(cost > 0 for cost in cost_att) and (
-            not hasattr(self, 'sparse_state') or
-            not callable(self.sparse_state)
-        ):
-            raise ValueError(
-                'When the cost of attention is non-negative, a DynamicGame'
-                ' subclass must implement the sparse_state() method.')
-        self.cost_att = cost_att
+        self.cost_att = np.array(cost_att)
 
         if action_bounds is None:
             # Set default action bound
@@ -101,23 +94,28 @@ class DynamicGame(abc.ABC):
 
     def compute(
         self,
-        value_functions: interpolation.MultivariateInterpolatedFunction,
+        interp_base: 'interpolation.InterpolatedFunction',
         x0=None,
+        att0=None,
         eps=1e-4,
         chunk_size=50,
         max_iter_outer=None,
-        max_iter_inner=None
+        max_iter_inner=None,
+        interpolate_pf=False
     ):
-        if len(value_functions.vf) != self.n_players:
-            raise ValueError('Provide a value function for every player')
-
         if (any(cost > 0 for cost in self.cost_att) and
-            not isinstance(value_functions.vf[0],
+            not isinstance(interp_base,
                            interpolation.DifferentiableInterpolatedFunction)):
             raise ValueError(
                 'Can only calculate sparsity for differentiable value'
                 'functions'
             )
+
+        if (any(cost > 0 for cost in self.cost_att)):
+            interpolate_pf = True
+
+        interp_funcs = interpolation.DynamicGameInterpolatedFunctions(
+            interp_base, self)
 
         # Players may have different numbers of actions. Allocate the maximum
         # number of actions amongst all of them for every player. This might
@@ -126,7 +124,7 @@ class DynamicGame(abc.ABC):
         # gain a lot of effiency since we can pass around a NumPy array instead
         # of a Python list containing NumPy arrays.
         max_actions = np.max(self.n_actions)
-        init_actions = np.zeros((value_functions.shape[0],
+        init_actions = np.zeros((interp_funcs.shape[0],
                                  self.n_players * max_actions))
         if isinstance(x0, Sequence):
             if len(x0) != self.n_players:
@@ -140,14 +138,14 @@ class DynamicGame(abc.ABC):
                 raise ValueError('Provide the correct number of initial'
                                  ' actions for every player.')
 
-            if any(x0_i.shape[0] != value_functions.shape[0] for x0_i in x0):
+            if any(x0_i.shape[0] != interp_funcs.shape[0] for x0_i in x0):
                 raise ValueError('Provide initial actions for every node.')
 
             for i in range(self.n_players):
                 mi = i * max_actions
                 init_actions[:, mi:(mi + self.n_actions[i])] = x0[i]
         elif isinstance(x0, np.ndarray):
-            if x0.shape[0] != value_functions.shape[0]:
+            if x0.shape[0] != interp_funcs.shape[0]:
                 raise ValueError('Provide initial actions for every node.')
 
             if x0.shape[1] != self.n_players:
@@ -168,10 +166,29 @@ class DynamicGame(abc.ABC):
         # that node. Combine them into one so that the node and the related
         # actions are always in the same chunk, so that we can map_blocks()
         # over it efficiently.
-        nodes = dask.array.from_array(value_functions, (chunk_size, -1))
+        nodes = dask.array.from_array(interp_funcs, (chunk_size, -1))
         lines = dask.array.concatenate((nodes, init_actions), axis=1)
         lines = lines.rechunk((chunk_size, -1))
         lines = lines.persist()
+
+        if att0 is None:
+            attention = np.ones((self.n_players, interp_funcs.shape[1]),
+                                dtype=np.bool_)
+            default_state = np.zeros(interp_funcs.shape[0])
+        else:
+            if att0.shape[0] != self.n_players:
+                raise ValueError('Provide initial attentions for every'
+                                 ' player.')
+            if att0.shape[1] != interp_funcs.shape[1]:
+                raise ValueError('Provide initial attentions for state'
+                                 ' variable.')
+            if att0.dtype != np.bool_:
+                raise ValueError('Provide intiial attentions with a bool'
+                                 ' dtype.')
+            attention = att0
+            default_state, _ = self.compute_default_state(
+                interp_funcs, nodes[0].compute())
+        logging.debug(f'Starting default state: {default_state}')
 
         if x0 is not None:
             # If starting actions are passed, initialize value actions
@@ -179,10 +196,15 @@ class DynamicGame(abc.ABC):
             prev_value_function = []
             for i in range(self.n_players):
                 prev_value_function.append(
-                    self.calculate_value_function(lines, i, value_functions,
+                    self.calculate_value_function(lines, i, interp_funcs,
+                                                  attention[i], default_state,
                                                   chunk_size, eps)
                 )
             prev_optimal = [True] * self.n_players
+
+            if interpolate_pf:
+                for i in range(self.n_players):
+                    self._update_policy_functions(lines, i, interp_funcs)
         else:
             prev_value_function = [None] * self.n_players
             prev_optimal = [False] * self.n_players
@@ -193,10 +215,10 @@ class DynamicGame(abc.ABC):
             for i in range(self.n_players):
                 logging.info(f'Outer loop step for player {i}')
 
-                lines, calc_value_function = self._inner_loop(
-                    lines, i, value_functions, eps, chunk_size,
+                attention[i], lines, calc_value_function = self._inner_loop(
+                    lines, i, interp_funcs, eps, chunk_size,
                     prev_optimal[i], prev_value_function[i],
-                    max_iter_inner
+                    max_iter_inner, interpolate_pf
                 )
 
                 if prev_value_function[i] is not None:
@@ -232,7 +254,7 @@ class DynamicGame(abc.ABC):
             _, actions = self._from_line(lines[i])
             for j in range(self.n_players):
                 optimal_actions[j][i] = actions[j]
-        return optimal_actions
+        return attention, optimal_actions, interp_funcs
 
     def _to_line(self, node, actions):
         return np.concatenate((
@@ -246,16 +268,28 @@ class DynamicGame(abc.ABC):
         actions = line[-n_actions:].reshape((self.n_players, max_n_actions))
         return node, actions
 
+    def _update_policy_functions(self, lines, player_ind, interp_funcs):
+        mi = interp_funcs.shape[1] + player_ind * np.max(self.n_actions)
+        for i in range(self.n_actions[player_ind]):
+            actions = lines[:, mi + i].compute()
+            interp_funcs.pf[player_ind][i].update(actions)
+
     def _inner_loop(
-        self, lines, player_ind, value_functions, eps, chunk_size,
-        prev_optimal=False, prev_value_function=None, max_iter_inner=None
+        self, lines, player_ind, interp_funcs, eps, chunk_size,
+        prev_optimal=False, prev_value_function=None, max_iter_inner=None,
+        interpolate_pf=False
     ):
         n_iters = 0
         while True:
-            lines = self.optimal_actions(
-                lines, player_ind, value_functions, chunk_size, prev_optimal)
+            attention, default_state, lines = self.optimal_actions(
+                lines, player_ind, interp_funcs, chunk_size, prev_optimal)
+
+            if interpolate_pf:
+                self._update_policy_functions(lines, player_ind, interp_funcs)
+
             calc_value_function = self.calculate_value_function(
-                lines, player_ind, value_functions, chunk_size, eps)
+                lines, player_ind, interp_funcs, attention, default_state,
+                chunk_size, eps)
             if prev_value_function is not None:
                 vf_norm = self.value_function_norm(
                     calc_value_function, prev_value_function
@@ -275,26 +309,116 @@ class DynamicGame(abc.ABC):
                     'reached without convergence.'
                 )
 
-        return lines, calc_value_function
+        return attention, lines, calc_value_function
 
     def optimal_actions(
-        self, lines, player_ind, value_functions, chunk_size, prev_optimal=None
+        self, lines, player_ind, interp_funcs, chunk_size, prev_optimal=False
     ):
-        return dask.array.core.map_blocks(
+        dim_state = interp_funcs.shape[1]
+        if self.cost_att[player_ind] > 0:
+            # Potentially, we have sparsity for this player. Figure out
+            # which states it pays attention to.
+            default_state, default_state_var = self.compute_default_state(
+                interp_funcs, lines[0, :dim_state].compute())
+
+            actions_others_default = np.zeros((self.n_players - 1,
+                                               np.max(self.n_actions)))
+            for i in range(self.n_players):
+                if i == player_ind:
+                    continue
+                for j in range(self.n_actions[i]):
+                    ind = i if i < player_ind else i - 1
+                    actions_others_default[ind, j] = \
+                        interp_funcs.pf[i][j](default_state)
+
+            vf = interp_funcs.vf[player_ind]
+            vf_zero = ZeroValueFunction(vf)
+            start_actions = [interp_funcs.pf[player_ind][i](default_state)
+                             for i in range(self.n_actions[player_ind])]
+            start_actions = np.array(start_actions)
+            default_action = self.calculate_optimal_action(
+                default_state, start_actions, player_ind, vf_zero,
+                actions_others_default
+            )
+            logging.debug(f'Default state = {default_state},'
+                          f' default action = {default_action}')
+
+            actions = np.insert(actions_others_default,
+                                player_ind,
+                                default_action,
+                                axis=0)
+            deriv_action_state = self.derivative_action_state(
+                default_state, player_ind, vf, actions_others_default,
+                default_action)
+            state_grad = self.state_evolution_gradient(player_ind,
+                                                       default_state,
+                                                       actions)
+            profits_hess = self.static_profits_hessian(player_ind,
+                                                       default_state,
+                                                       actions)
+            vf_hess = vf.second_derivative(default_state)
+            hess_profits_action = (
+                profits_hess +
+                state_grad.T @ vf_hess @ state_grad
+            )
+            benefit_att = default_state_var * np.diag(
+                deriv_action_state.T @ hess_profits_action @
+                deriv_action_state
+            )
+            attention = benefit_att >= self.cost_att
+
+            if np.any(attention):
+                # TODO
+                pass
+            else:
+                # dask.array.unique() does not work when we pass it an empty
+                # array. In this case, the only relevant state is the default
+                # state.
+                relevant_lines = np.concatenate(
+                    [default_state, actions.flatten()])
+                relevant_lines = dask.array.from_array(
+                    relevant_lines[np.newaxis], chunks=(1, -1)
+                )
+        else:
+            attention = np.ones(dim_state, dtype=np.bool_)
+            default_state = np.zeros(dim_state)  # Is irrelevant in this case
+            relevant_lines = lines
+
+        relevant_lines = dask.array.core.map_blocks(
             self._optimal_action,
-            lines,
+            relevant_lines,
             dtype=lines.dtype,
             player_ind=player_ind,
-            value_function=value_functions.vf[player_ind],
-            prev_optimal=None
-        ).persist()
+            value_function=interp_funcs.vf[player_ind],
+            prev_optimal=prev_optimal
+        )
+
+        if self.cost_att[player_ind] > 0:
+            if np.any(attention):
+                # TODO
+                pass
+            else:
+                actions = relevant_lines[0, dim_state:].compute().flatten()
+                lines = dask.array.map_blocks(
+                    lambda x: np.concatenate(
+                        (x[:, :dim_state],
+                         np.tile(actions[np.newaxis], (x.shape[0], 1))
+                         ), axis=1),
+                    lines,
+                    dtype=lines.dtype
+                )
+        else:
+            lines = relevant_lines
+
+        lines = lines.persist()
+        return attention, default_state, lines
 
     def _optimal_action(self, lines, prev_optimal, player_ind, value_function):
         ret = np.zeros(lines.shape)
         for i in range(lines.shape[0]):
             state, actions = self._from_line(lines[i])
             actions_others = np.delete(actions, player_ind, axis=0)
-            prev = None if prev_optimal is None else prev_optimal[i]
+            prev = actions[player_ind] if prev_optimal else None
             optimal_action = self.calculate_optimal_action(
                 state, prev, player_ind, value_function, actions_others
             )
@@ -323,35 +447,52 @@ class DynamicGame(abc.ABC):
             return res.x
 
     def _maximize_value(
-        self, state, player_ind, value_functions, actions_others, x0, bounds
+        self, state, player_ind, interp_funcs, actions_others, x0, bounds
     ):
         return scipy.optimize.minimize(
             lambda x: self._neg_value(
-                state, player_ind, value_functions,
+                state, player_ind, interp_funcs,
                 np.insert(actions_others, player_ind, x, axis=0)),
             x0,
             bounds=bounds
         )
 
-    def _value(self, state, player_ind, value_function, actions):
+    def _value(
+        self, state, player_ind, value_function, attention, default_state,
+        actions
+    ):
         next_state = self.state_evolution(state, actions)
+        if np.any(~attention):
+            # There is inattention => calculte the perceived value function
+            next_state = self.sparse_state(state, attention, default_state)
         cont_value = value_function(next_state)
         return (self.static_profits(player_ind, state, actions) +
                 self.beta[player_ind] * cont_value)
 
     def _neg_value(self, state, player_ind, value_function, actions):
         return -1 * self._value(
-            state, player_ind, value_function, actions)
+            state, player_ind, value_function,
+            np.ones(state.shape, dtype=np.bool_),
+            np.zeros(state.shape), actions)
 
-    def _value_from_blocks(self, lines, player_ind, value_function):
+    def _value_from_blocks(
+        self, lines, player_ind, value_function, attention, default_state
+    ):
         ret = np.zeros(lines.shape[0])
         for i in range(lines.shape[0]):
             state, actions = self._from_line(lines[i])
-            ret[i] = self._value(state, player_ind, value_function, actions)
+            # TODO: loop over only the sparse states in calculate_value_function()
+            # => this will be more efficient!
+            if np.any(~attention):
+                state = self.sparse_state(state, attention, default_state)
+            ret[i] = self._value(
+                state, player_ind, value_function, attention, default_state,
+                actions)
         return ret
 
     def calculate_value_function(
-        self, lines, player_ind, value_functions, chunk_size, eps
+        self, lines, player_ind, interp_funcs, attention, default_state,
+        chunk_size, eps
     ):
         # Because _value() is a lot faster than calculate_optimal_action(),
         # we use a larger chunk size here.
@@ -367,9 +508,11 @@ class DynamicGame(abc.ABC):
                 chunks=(lines.shape[0],),
                 drop_axis=1,
                 player_ind=player_ind,
-                value_function=value_functions.vf[player_ind],
+                value_function=interp_funcs.vf[player_ind],
+                attention=attention,
+                default_state=default_state
             ).compute()
-            value_functions.vf[player_ind].update(calc_value_function)
+            interp_funcs.vf[player_ind].update(calc_value_function)
 
             if prev_value_function is not None:
                 vf_diff = self.value_function_norm(
@@ -386,7 +529,7 @@ class DynamicGame(abc.ABC):
         return np.max(np.abs((new_value - old_value) / (1 + new_value)))
 
     def compute_optimization_x0(
-        self, state, player_ind, value_functions, actions_others, prev_optimal
+        self, state, player_ind, interp_funcs, actions_others, prev_optimal
     ):
         if prev_optimal is None:
             return np.zeros(self.n_actions[player_ind])
@@ -394,9 +537,53 @@ class DynamicGame(abc.ABC):
             return prev_optimal
 
     def compute_action_bounds(
-        self, state, player_ind, value_functions, actions_others
+        self, state, player_ind, interp_funcs, actions_others
     ):
         return self.action_bounds[player_ind]
+
+    def compute_default_state(
+        self, interp_funcs, start_state, n_sims=10000
+    ):
+        states = np.empty((n_sims, start_state.shape[0]))
+        state = start_state
+        for state_ind in range(n_sims):
+            states[state_ind] = state
+            actions = np.empty((self.n_players, np.max(self.n_actions)))
+            for i in range(self.n_players):
+                for j in range(self.n_actions[i]):
+                    actions[i, j] = interp_funcs.pf[i][j](state)
+            state = self.state_evolution(state, actions)
+
+        default_state = np.mean(states, axis=0)
+        default_state_var = np.var(states, axis=0)
+        return default_state, default_state_var
+
+    def sparse_state(self, state, att, default_state):
+        sparse_state = state.copy()
+        sparse_state[~att] = default_state[~att]
+        return sparse_state
+
+    def derivative_action_state(
+        self, state, player_ind, value_function, actions_others,
+        action=None, eps=np.sqrt(np.finfo(float).eps)
+    ):
+        # TODO: Perhaps see if we can parallelize this also
+        # (is this worth it?)
+        deriv = np.empty((self.n_actions[player_ind], state.shape[0]))
+        for i in range(self.n_actions[player_ind]):
+            deriv[i] = scipy.optimize.approx_fprime(
+                state,
+                functools.partial(
+                    self.calculate_optimal_action,
+                    prev_optimal=action,
+                    player_ind=player_ind,
+                    value_function=value_function,
+                    actions_others=actions_others
+                ),
+                eps
+            )
+
+        return deriv
 
     @abc.abstractmethod
     def static_profits(self, player_ind, state, actions):
@@ -424,8 +611,16 @@ class ZeroValueFunction(interpolation.DifferentiableInterpolatedFunction):
     def update(self, values):
         pass
 
+    @property
     def num_nodes(self):
-        return self._based_on.num_nodes()
+        return self._based_on.num_nodes
+
+    @property
+    def dim_state(self):
+        return self._based_on.dim_state
+
+    def __getitem__(self, key):
+        return self._based_on[key]
 
     def derivative(self, x):
         return self._deriv
@@ -442,19 +637,19 @@ class DynamicGameDifferentiable(DynamicGame):
 
     def compute(
         self,
-        value_functions: interpolation.MultivariateInterpolatedFunction,
+        interp_base: 'interpolation.DifferentiableInterpolatedFunction',
         *args,
         **kwargs
     ):
         if not isinstance(
-            value_functions.vf[0],
+            interp_base,
             interpolation.DifferentiableInterpolatedFunction
         ):
             raise ValueError(
                 'Provide a DifferentiableInterpolatedFunction when computing'
                 'a DynamicGameDifferentiable')
 
-        return super().compute(value_functions, *args, **kwargs)
+        return super().compute(interp_base, *args, **kwargs)
 
     def _maximize_value(
         self, state, player_ind, value_function, actions_others, x0, bounds

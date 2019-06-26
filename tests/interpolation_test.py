@@ -310,7 +310,7 @@ def test_chebyshev_nodes():
     # equal the standard Chebyshev nodes
     func = ChebyshevInterpolatedFunction(2, 1, -1 * np.ones(2), np.ones(2))
     nodes = func.nodes()
-    assert isinstance(nodes, collections.Iterable)
+    assert isinstance(nodes, collections.abc.Iterable)
     products = set(nodes)  # The order of the nodes does not matter
     assert products == {
         (func.cheb_nodes[0], func.cheb_nodes[0]),

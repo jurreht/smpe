@@ -24,3 +24,4 @@ def dask_client(request):
     client = dask.distributed.Client(cluster)
     yield client
     client.close()
+    cluster.close()

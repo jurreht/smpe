@@ -7,10 +7,12 @@ from numpy.testing import assert_allclose
 import pytest
 import scipy.optimize
 
-from smpe.interpolation import (InterpolatedFunction,
-                                DifferentiableInterpolatedFunction,
-                                TwiceDifferentiableInterpolatedFunction,
-                                ChebyshevInterpolatedFunction)
+from smpe.interpolation import (
+    InterpolatedFunction,
+    DifferentiableInterpolatedFunction,
+    TwiceDifferentiableInterpolatedFunction,
+    ChebyshevInterpolatedFunction,
+)
 
 
 class CallNotImplementedMock(InterpolatedFunction):
@@ -165,8 +167,8 @@ class NumpyNodesInterpolatedFunction(InterpolatedFunction):
         pass
 
     def nodes(self):
-        yield [0., 0.]
-        yield [1., 2.]
+        yield [0.0, 0.0]
+        yield [1.0, 2.0]
 
     def num_nodes(self):
         pass
@@ -184,7 +186,7 @@ def test_numpy_nodes():
     numpy_nodes() should return a Numpy array of all the nodes.
     """
     func = NumpyNodesInterpolatedFunction()
-    assert np.all(func.numpy_nodes() == np.array([[0., 0.], [1., 2.]]))
+    assert np.all(func.numpy_nodes() == np.array([[0.0, 0.0], [1.0, 2.0]]))
 
 
 class DerivativeNotImplementedMock(DifferentiableInterpolatedFunction):
@@ -207,9 +209,7 @@ def test_derivative_not_implemented():
         DerivativeNotImplementedMock()
 
 
-class SecondDerivativeNotImplementedMock(
-    TwiceDifferentiableInterpolatedFunction
-):
+class SecondDerivativeNotImplementedMock(TwiceDifferentiableInterpolatedFunction):
     def __call__(self, x):
         pass
 
@@ -243,12 +243,10 @@ def test_chebyshev_nodes_per_state_check(nodes_per_state):
     if nodes_per_state < 2:
         with pytest.raises(ValueError):
             ChebyshevInterpolatedFunction(
-                nodes_per_state, degree,
-                np.zeros(3), np.ones(3))
+                nodes_per_state, degree, np.zeros(3), np.ones(3)
+            )
     else:
-        ChebyshevInterpolatedFunction(
-            nodes_per_state, degree,
-            np.zeros(3), np.ones(3))
+        ChebyshevInterpolatedFunction(nodes_per_state, degree, np.zeros(3), np.ones(3))
 
 
 # low max_value speeds up the test
@@ -260,19 +258,16 @@ def test_chebyshev_degree_check(degree):
     """
     if degree < 1:
         with pytest.raises(ValueError):
-            ChebyshevInterpolatedFunction(
-                degree + 1, degree, np.zeros(3), np.ones(3)
-            )
+            ChebyshevInterpolatedFunction(degree + 1, degree, np.zeros(3), np.ones(3))
     else:
-        ChebyshevInterpolatedFunction(
-            degree + 1, degree, np.zeros(3), np.ones(3)
-        )
+        ChebyshevInterpolatedFunction(degree + 1, degree, np.zeros(3), np.ones(3))
 
 
 @given(
     # low max_value speeds up the test
     st.integers(min_value=1, max_value=4),
-    st.integers(min_value=1, max_value=4))
+    st.integers(min_value=1, max_value=4),
+)
 def test_chebyshev_nodes_per_state_degree_check(nodes_per_state, degree):
     """
     The Chebyshev constructor must raise an exception if the number of
@@ -282,10 +277,10 @@ def test_chebyshev_nodes_per_state_degree_check(nodes_per_state, degree):
     if nodes_per_state <= degree:
         with pytest.raises(ValueError):
             ChebyshevInterpolatedFunction(
-                nodes_per_state, degree, np.zeros(3), np.ones(3))
+                nodes_per_state, degree, np.zeros(3), np.ones(3)
+            )
     else:
-        ChebyshevInterpolatedFunction(
-            nodes_per_state, degree, np.zeros(3), np.ones(3))
+        ChebyshevInterpolatedFunction(nodes_per_state, degree, np.zeros(3), np.ones(3))
 
 
 def test_chebyshev_node_bounds_length():
@@ -303,8 +298,7 @@ def test_chebyshev_node_incorrect_bounds():
     lower bounds is >= one of the upper bounds.
     """
     with pytest.raises(ValueError):
-        ChebyshevInterpolatedFunction(
-            3, 2, np.array([0, 1]), np.array([1, .5]))
+        ChebyshevInterpolatedFunction(3, 2, np.array([0, 1]), np.array([1, 0.5]))
 
 
 def test_chebyshev_nodes():
@@ -322,7 +316,7 @@ def test_chebyshev_nodes():
         (func.cheb_nodes[0], func.cheb_nodes[0]),
         (func.cheb_nodes[0], func.cheb_nodes[1]),
         (func.cheb_nodes[1], func.cheb_nodes[0]),
-        (func.cheb_nodes[1], func.cheb_nodes[1])
+        (func.cheb_nodes[1], func.cheb_nodes[1]),
     }
 
 
@@ -331,39 +325,47 @@ def test_chebyshev_nodes_stable_order():
     ChebyshevInterpolatedFunction.nodes() must return the same order on
     every invocation.
     """
-    func = ChebyshevInterpolatedFunction(
-        2, 1, np.array([0, -1]), np.array([1, 2]))
+    func = ChebyshevInterpolatedFunction(2, 1, np.array([0, -1]), np.array([1, 2]))
     assert list(func.nodes()) == list(func.nodes())
 
 
 @st.composite
 def node_bounds(draw):
     dim_state = draw(st.integers(min_value=1, max_value=3))
-    node_min = draw(st.lists(
-        st.floats(
-            allow_nan=False, allow_infinity=False,
-            # Bound values to prevent float overflow issues
-            min_value=-1000, max_value=1000
-        ), min_size=dim_state, max_size=dim_state))
+    node_min = draw(
+        st.lists(
+            st.floats(
+                allow_nan=False,
+                allow_infinity=False,
+                # Bound values to prevent float overflow issues
+                min_value=-1000,
+                max_value=1000,
+            ),
+            min_size=dim_state,
+            max_size=dim_state,
+        )
+    )
     node_max = []
     for i in range(dim_state):
-        node_max.append(draw(st.floats(
-            min_value=node_min[i] + 1,
-            allow_nan=False, allow_infinity=False)))
+        node_max.append(
+            draw(
+                st.floats(
+                    min_value=node_min[i] + 1, allow_nan=False, allow_infinity=False
+                )
+            )
+        )
     return node_min, node_max
 
 
 @given(
-    node_bounds=node_bounds(),
-    nodes_per_state=st.integers(min_value=2, max_value=10)
+    node_bounds=node_bounds(), nodes_per_state=st.integers(min_value=2, max_value=10)
 )
 def test_chebyshev_nodes_in_range(nodes_per_state, node_bounds):
     """
     ChebyshevInterpolatedFunction nodes must lie within the specified range.
     """
     node_min, node_max = node_bounds
-    func = ChebyshevInterpolatedFunction(
-        nodes_per_state, 1, node_min, node_max)
+    func = ChebyshevInterpolatedFunction(nodes_per_state, 1, node_min, node_max)
     nodes = func.numpy_nodes()
     for i in range(func.dim_state):
         assert np.all(node_min[i] <= nodes[:, i])
@@ -391,8 +393,9 @@ def slices(ir):
         st.one_of(
             st.none(),
             st.integers(min_value=-ir, max_value=-1),
-            st.integers(min_value=1, max_value=ir)
-        )).map(lambda x: slice(*x))
+            st.integers(min_value=1, max_value=ir),
+        ),
+    ).map(lambda x: slice(*x))
 
 
 @given(slices(64))
@@ -427,43 +430,67 @@ def test_chebyshev_getitem_numpy_slice(ind1, ind2):
 
 interpolation_tests = [
     (10, 2, np.array([0]), np.array([1]), lambda x: x),
-    (10, 2, np.array([0, 1]), np.array([1, 10]), lambda x, y: x - y**2),
+    (10, 2, np.array([0, 1]), np.array([1, 10]), lambda x, y: x - y ** 2),
     # The following 4 test cases are from Franke (1979), "A Critical
     # Comparison of Some Methods for Interpolation of Scattered Data"
     # (http://hdl.handle.net/10945/35052)
-    (100, 3, np.array([0, 0]), np.array([1, 1]),
-        lambda x, y: (1.25 + np.cos(5.4 * y)) / (6 * (1 + (3 * x - 1)**2))),
-    (100, 3, np.array([0, 0]), np.array([1, 1]),
-        lambda x, y: (np.tanh(9 * y - 9 * x) + 1) / 9),
-    (100, 3, np.array([0, 0]), np.array([1, 1]),
-        lambda x, y: np.exp(-81 * ((x - .5)**2 + (y - .5)**2 / 16)) / 3),
-    (100, 3, np.array([0, 0]), np.array([1, 1]),
-        lambda x, y: np.exp(-81 * ((x - .5)**2 + (y - .5)**2 / 4)) / 3),
-    (100, 3, np.array([0, 0]), np.array([1, 1]),
-        lambda x, y: np.sqrt(64 - 81 * ((x - .5)**2 + (y - .5)**2)) / 9 - .5)
+    (
+        100,
+        3,
+        np.array([0, 0]),
+        np.array([1, 1]),
+        lambda x, y: (1.25 + np.cos(5.4 * y)) / (6 * (1 + (3 * x - 1) ** 2)),
+    ),
+    (
+        100,
+        3,
+        np.array([0, 0]),
+        np.array([1, 1]),
+        lambda x, y: (np.tanh(9 * y - 9 * x) + 1) / 9,
+    ),
+    (
+        100,
+        3,
+        np.array([0, 0]),
+        np.array([1, 1]),
+        lambda x, y: np.exp(-81 * ((x - 0.5) ** 2 + (y - 0.5) ** 2 / 16)) / 3,
+    ),
+    (
+        100,
+        3,
+        np.array([0, 0]),
+        np.array([1, 1]),
+        lambda x, y: np.exp(-81 * ((x - 0.5) ** 2 + (y - 0.5) ** 2 / 4)) / 3,
+    ),
+    (
+        100,
+        3,
+        np.array([0, 0]),
+        np.array([1, 1]),
+        lambda x, y: np.sqrt(64 - 81 * ((x - 0.5) ** 2 + (y - 0.5) ** 2)) / 9 - 0.5,
+    ),
 ]
 
 
 @given(
     nodes_per_state=st.integers(min_value=2, max_value=5),
-    n_states=st.integers(min_value=1, max_value=4)
+    n_states=st.integers(min_value=1, max_value=4),
 )
 def test_chebyshev_num_nodes(nodes_per_state, n_states):
     func = ChebyshevInterpolatedFunction(
-        nodes_per_state, 1, np.zeros(n_states), np.ones(n_states))
-    assert func.num_nodes == nodes_per_state**n_states
+        nodes_per_state, 1, np.zeros(n_states), np.ones(n_states)
+    )
+    assert func.num_nodes == nodes_per_state ** n_states
 
 
 @pytest.mark.parametrize(
-    'nodes_per_state, degree, node_min, node_max, func',
-    interpolation_tests
+    "nodes_per_state, degree, node_min, node_max, func", interpolation_tests
 )
 def test_chebyshev_fit(nodes_per_state, degree, node_min, node_max, func):
     """
     The Chebyshev approximation should be close to the true function value.
     """
-    approx = ChebyshevInterpolatedFunction(
-        nodes_per_state, degree, node_min, node_max)
+    approx = ChebyshevInterpolatedFunction(nodes_per_state, degree, node_min, node_max)
     vals = np.zeros(approx.n_nodes)
     for i, node in enumerate(approx.nodes()):
         vals[i] = func(*node)
@@ -473,18 +500,14 @@ def test_chebyshev_fit(nodes_per_state, degree, node_min, node_max, func):
 
 
 @pytest.mark.parametrize(
-    'nodes_per_state, degree, node_min, node_max, func',
-    interpolation_tests
+    "nodes_per_state, degree, node_min, node_max, func", interpolation_tests
 )
-def test_chebyshev_derivative(
-    nodes_per_state, degree, node_min, node_max, func
-):
+def test_chebyshev_derivative(nodes_per_state, degree, node_min, node_max, func):
     """
     The calculated derivative of the Chebyshev should be close to a
     numerically calculated one.
     """
-    approx = ChebyshevInterpolatedFunction(
-        nodes_per_state, degree, node_min, node_max)
+    approx = ChebyshevInterpolatedFunction(nodes_per_state, degree, node_min, node_max)
     vals = np.zeros(approx.n_nodes)
     for i, node in enumerate(approx.nodes()):
         vals[i] = func(*node)
@@ -492,25 +515,19 @@ def test_chebyshev_derivative(
 
     for node in approx.nodes():
         assert_allclose(
-            scipy.optimize.check_grad(approx, approx.derivative, node),
-            0,
-            atol=1e-6
+            scipy.optimize.check_grad(approx, approx.derivative, node), 0, atol=1e-6
         )
 
 
 @pytest.mark.parametrize(
-    'nodes_per_state, degree, node_min, node_max, func',
-    interpolation_tests
+    "nodes_per_state, degree, node_min, node_max, func", interpolation_tests
 )
-def test_chebyshev_second_derivative(
-    nodes_per_state, degree, node_min, node_max, func
-):
+def test_chebyshev_second_derivative(nodes_per_state, degree, node_min, node_max, func):
     """
     The calculated second derivative of the Chebyshev should be close to a
     numerically calculated one.
     """
-    approx = ChebyshevInterpolatedFunction(
-        nodes_per_state, degree, node_min, node_max)
+    approx = ChebyshevInterpolatedFunction(nodes_per_state, degree, node_min, node_max)
     vals = np.zeros(approx.n_nodes)
     for i, node in enumerate(approx.nodes()):
         vals[i] = func(*node)
@@ -527,9 +544,10 @@ def test_chebyshev_second_derivative(
                     lambda x: approx.derivative(x)[i],
                     lambda x: hess[i],
                     node,
-                    epsilon=np.sqrt(np.finfo(float).eps)),
+                    epsilon=np.sqrt(np.finfo(float).eps),
+                ),
                 0,
-                atol=1e-6
+                atol=1e-6,
             )
 
 
@@ -538,11 +556,10 @@ def test_chebyshev_share():
     share() should generate an exacpt copy, where all elements except
     for coefs are shared in memory with the original.
     """
-    original = ChebyshevInterpolatedFunction(
-        3, 2, np.array([0]), np.array([1]))
+    original = ChebyshevInterpolatedFunction(3, 2, np.array([0]), np.array([1]))
     copy = original.share()
     for k in set(original.__dict__).union(copy.__dict__):
-        if k != 'coefs':
+        if k != "coefs":
             assert original.__dict__[k] is copy.__dict__[k]
         else:
             assert original.__dict__[k] is not copy.__dict__[k]

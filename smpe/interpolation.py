@@ -47,7 +47,6 @@ class InterpolatedFunction(abc.ABC):
     def ndim(self):
         # This is to interface with Dask.
         return 2
-    
 
     def numpy_nodes(self):
         return np.array(list(iter(self.nodes())))
@@ -63,9 +62,7 @@ class DifferentiableInterpolatedFunction(InterpolatedFunction):
         pass
 
 
-class TwiceDifferentiableInterpolatedFunction(
-    DifferentiableInterpolatedFunction
-):
+class TwiceDifferentiableInterpolatedFunction(DifferentiableInterpolatedFunction):
     @abc.abstractmethod
     def second_derivative(self, x):
         pass
@@ -127,29 +124,27 @@ class DynamicGameInterpolatedFunctions:
 class ChebyshevInterpolatedFunction(
     TwiceDifferentiableInterpolatedFunction, ShareableInterpolatedFunction
 ):
-    def __init__(
-        self, nodes_per_state, degree, node_min, node_max,
-        complete=True
-    ):
+    def __init__(self, nodes_per_state, degree, node_min, node_max, complete=True):
         if degree < 1:
-            raise ValueError(
-                'Chebyshev polynomial degree must be at least one')
+            raise ValueError("Chebyshev polynomial degree must be at least one")
         self.degree = degree
 
         if nodes_per_state <= degree:
             raise ValueError(
-                'The number of nodes per state must be larger than the '
-                'degree of a Chebyshev polynomial')
+                "The number of nodes per state must be larger than the "
+                "degree of a Chebyshev polynomial"
+            )
         self.nodes_per_state = nodes_per_state
 
         self.node_min = np.array(node_min)
         self.node_max = np.array(node_max)
         if len(self.node_min) != len(self.node_max):
             raise ValueError(
-                'The number of node lower bounds must be equal to the '
-                'number of node upper bounds')
+                "The number of node lower bounds must be equal to the "
+                "number of node upper bounds"
+            )
         if np.any(self.node_min >= self.node_max):
-            raise ValueError('Node lower bounds must be below upper bounds')
+            raise ValueError("Node lower bounds must be below upper bounds")
 
         self._dim_state = len(node_min)
         self.n_nodes = nodes_per_state ** self.dim_state
@@ -159,7 +154,7 @@ class ChebyshevInterpolatedFunction(
 
         self._nodes = np.zeros((self.dim_state, self.nodes_per_state))
         for i in range(self.dim_state):
-            scale = .5 * (self.node_max[i] - self.node_min[i])
+            scale = 0.5 * (self.node_max[i] - self.node_min[i])
             scaled_nodes = (self.cheb_nodes + 1) * scale + self.node_min[i]
             self._nodes[i] = scaled_nodes
 
@@ -184,15 +179,19 @@ class ChebyshevInterpolatedFunction(
 
     def __call__(self, x):
         x = np.array(x)
-        x = _cheby_normalize_state(
-            x, self._dim_state, self.node_min, self.node_max)
+        x = _cheby_normalize_state(x, self._dim_state, self.node_min, self.node_max)
         inds = np.zeros(self._dim_state, dtype=np.int_)
 
-        pols = np.array([
-            _cheby_cheby_pols(s, self.degree) for s in np.asarray(x)])
+        pols = np.array([_cheby_cheby_pols(s, self.degree) for s in np.asarray(x)])
         return _cheby_call_opt(
-            self._dim_state, self.degree, self.complete, self.n_coefs,
-            self.coefs, inds, pols)
+            self._dim_state,
+            self.degree,
+            self.complete,
+            self.n_coefs,
+            self.coefs,
+            inds,
+            pols,
+        )
 
     def nodes(self):
         return itertools.product(*self._nodes)
@@ -230,9 +229,7 @@ class ChebyshevInterpolatedFunction(
         ret = np.empty(self._dim_state)
         for i in range(self.dim_state):
             ind = self._dim_state - i - 1
-            remainder = (
-                (key // self.nodes_per_state**i) %
-                self.nodes_per_state)
+            remainder = (key // self.nodes_per_state ** i) % self.nodes_per_state
             ret[ind] = self._nodes[ind, remainder]
             key -= remainder
         return ret[y_ind]
@@ -246,8 +243,7 @@ class ChebyshevInterpolatedFunction(
         else:
             # Calculate the range of y_ind as well to allocate the right amount
             # of memory
-            y_start, y_stop, y_step = self._slice_to_range(
-                y_ind, self._dim_state)
+            y_start, y_stop, y_step = self._slice_to_range(y_ind, self._dim_state)
             y_els = max(math.ceil((y_stop - y_start) / y_step), 0)
 
         if x_els <= 0:
@@ -301,40 +297,67 @@ class ChebyshevInterpolatedFunction(
             zip(self.nodes(), self.chebyshev_nodes())
         ):
             _cheby_update_step1(
-                self._dim_state, self.degree, self.complete,
-                self.n_coefs, node_ind, norm_node, coef_num, values)
+                self._dim_state,
+                self.degree,
+                self.complete,
+                self.n_coefs,
+                node_ind,
+                norm_node,
+                coef_num,
+                values,
+            )
 
         _cheby_update_step2(
-            self.nodes_per_state, self._dim_state, self.degree,
-            self.complete, self.n_coefs, self.cheb_nodes,
-            coef_num, self.coefs)
+            self.nodes_per_state,
+            self._dim_state,
+            self.degree,
+            self.complete,
+            self.n_coefs,
+            self.cheb_nodes,
+            coef_num,
+            self.coefs,
+        )
 
     def derivative(self, x):
         x = np.array(x)
-        x = _cheby_normalize_state(
-            x, self.dim_state, self.node_min, self.node_max)
+        x = _cheby_normalize_state(x, self.dim_state, self.node_min, self.node_max)
         inds = np.zeros(self._dim_state, dtype=np.int_)
 
         pols = np.array([_cheby_cheby_pols(s, self.degree) for s in x])
-        pols_2nd = np.array([
-            _cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
+        pols_2nd = np.array([_cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
         return _cheby_derivative_opt(
-            self._dim_state, self.degree, self.complete, self.n_coefs,
-            self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max)
+            self._dim_state,
+            self.degree,
+            self.complete,
+            self.n_coefs,
+            self.coefs,
+            inds,
+            pols,
+            pols_2nd,
+            self.node_min,
+            self.node_max,
+        )
 
     def second_derivative(self, x):
         x = np.array(x)
-        x = _cheby_normalize_state(
-            x, self._dim_state, self.node_min, self.node_max
-        )
+        x = _cheby_normalize_state(x, self._dim_state, self.node_min, self.node_max)
         inds = np.zeros(self._dim_state, dtype=np.int_)
 
         pols = np.array([_cheby_cheby_pols(s, self.degree) for s in x])
-        pols_2nd = np.array([
-            _cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
+        pols_2nd = np.array([_cheby_cheby_pols_2nd_kind(s, self.degree) for s in x])
         return _cheby_second_derivative_opt(
-            self._dim_state, self.degree, self.complete, self.n_coefs,
-            self.coefs, inds, pols, pols_2nd, self.node_min, self.node_max, x)
+            self._dim_state,
+            self.degree,
+            self.complete,
+            self.n_coefs,
+            self.coefs,
+            inds,
+            pols,
+            pols_2nd,
+            self.node_min,
+            self.node_max,
+            x,
+        )
 
     def __dask_tokenize__(self):
         # If we do not implement this, Dask will see calls on the same
@@ -356,18 +379,18 @@ class ChebyshevInterpolatedFunction(
 # solution.
 #
 
+
 @numba.jit(cache=True, nopython=True)
 def _cheby_make_cheb_nodes(nodes_per_state):
     cheb_nodes = np.zeros(nodes_per_state)
     for j in range(nodes_per_state):
-        cheb_nodes[j] = -1 * np.cos(
-            (2 * (j + 1) - 1) / (2 * nodes_per_state) * np.pi)
+        cheb_nodes[j] = -1 * np.cos((2 * (j + 1) - 1) / (2 * nodes_per_state) * np.pi)
     return cheb_nodes
 
 
 @numba.jit(cache=True, nopython=True)
 def _cheby_call_opt(dim_state, degree, complete, n_coefs, coefs, inds, pols):
-    ret = 0.
+    ret = 0.0
     for i in range(n_coefs):
         if complete and np.sum(inds) > degree:
             continue
@@ -385,8 +408,16 @@ def _cheby_call_opt(dim_state, degree, complete, n_coefs, coefs, inds, pols):
 
 @numba.jit(cache=True, nopython=True)
 def _cheby_derivative_opt(
-    dim_state, degree, complete, n_coefs, coefs, inds, pols, pols_2nd,
-    node_min, node_max
+    dim_state,
+    degree,
+    complete,
+    n_coefs,
+    coefs,
+    inds,
+    pols,
+    pols_2nd,
+    node_min,
+    node_max,
 ):
     deriv = np.zeros(dim_state)
 
@@ -420,8 +451,17 @@ def _cheby_derivative_opt(
 
 @numba.jit(cache=True, nopython=True)
 def _cheby_second_derivative_opt(
-    dim_state, degree, complete, n_coefs, coefs, inds, pols, pols_2nd,
-    node_min, node_max, x
+    dim_state,
+    degree,
+    complete,
+    n_coefs,
+    coefs,
+    inds,
+    pols,
+    pols_2nd,
+    node_min,
+    node_max,
+    x,
 ):
     deriv2 = np.zeros((dim_state, dim_state))
 
@@ -439,13 +479,15 @@ def _cheby_second_derivative_opt(
                         if inds[m] <= 1:
                             add_deriv2[j, k] = 0
                         elif x[m] == 1:
-                            add_deriv2[j, k] *= (n**4 - n**2) / 3
+                            add_deriv2[j, k] *= (n ** 4 - n ** 2) / 3
                         elif x[m] == -1:
-                            add_deriv2[j, k] *= ((-1)**n) * (n**4 - n**2) / 3
+                            add_deriv2[j, k] *= ((-1) ** n) * (n ** 4 - n ** 2) / 3
                         else:
                             add_deriv2[j, k] *= (
-                                n * ((n + 1) * pols[m][n] - pols_2nd[m][n]) /
-                                (x[m]**2 - 1))
+                                n
+                                * ((n + 1) * pols[m][n] - pols_2nd[m][n])
+                                / (x[m] ** 2 - 1)
+                            )
                     elif m == j or m == k:
                         if inds[m] == 0:
                             add_deriv2[j, k] = 0
@@ -462,8 +504,9 @@ def _cheby_second_derivative_opt(
     # Chain rule: account for normalization of state variables
     for j in range(dim_state):
         for k in range(dim_state):
-            deriv2[j, k] *= 4 / ((node_max[j] - node_min[j]) *
-                                 (node_max[k] - node_min[k]))
+            deriv2[j, k] *= 4 / (
+                (node_max[j] - node_min[j]) * (node_max[k] - node_min[k])
+            )
 
     return deriv2
 
@@ -490,8 +533,7 @@ def _cheby_update_step1(
 
 @numba.jit(cache=True, nopython=True)
 def _cheby_update_step2(
-    nodes_per_state, dim_state, degree, complete, n_coefs, cheb_nodes,
-    coef_num, coefs
+    nodes_per_state, dim_state, degree, complete, n_coefs, cheb_nodes, coef_num, coefs
 ):
     coef_denum = np.zeros((n_coefs, dim_state))
     for j in range(nodes_per_state):
@@ -502,7 +544,7 @@ def _cheby_update_step2(
 
             pol = _cheby_cheby_pols(cheb_nodes[j], degree)
             for k in range(dim_state):
-                coef_denum[ind, k] += pol[inds[k]]**2
+                coef_denum[ind, k] += pol[inds[k]] ** 2
             _cheby_update_inds(inds, dim_state, degree)
 
     inds = np.zeros(dim_state, dtype=np.int_)
@@ -541,8 +583,8 @@ def _cheby_normalize_state(state, dim_state, node_min, node_max):
     normalized_state = state.copy()
     for i in range(dim_state):
         normalized_state[i] = (
-            2 * (state[i] - node_min[i]) /
-            (node_max[i] - node_min[i]) - 1)
+            2 * (state[i] - node_min[i]) / (node_max[i] - node_min[i]) - 1
+        )
 
     return normalized_state
 
@@ -552,7 +594,7 @@ def _cheby_update_inds(inds, dim_state, degree):
     for j in range(dim_state - 1, -1, -1):
         if inds[j] < degree:
             inds[j] += 1
-            inds[(j + 1):] = 0
+            inds[(j + 1) :] = 0
             break
 
 
@@ -560,5 +602,5 @@ def _cheby_update_inds(inds, dim_state, degree):
 def _cheby_coef_ind(inds, dim_state, degree):
     ind = 0
     for j in range(dim_state):
-        ind += inds[j] * (degree + 1)**(dim_state - j - 1)
+        ind += inds[j] * (degree + 1) ** (dim_state - j - 1)
     return ind

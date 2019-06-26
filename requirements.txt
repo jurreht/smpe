@@ -6,3 +6,4 @@ pycodestyle
 pytest-profiling
 graphviz
 distributed >= 1.25.0
+blac 

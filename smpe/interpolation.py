@@ -43,6 +43,12 @@ class InterpolatedFunction(abc.ABC):
         # always double.
         return np.double
 
+    @property
+    def ndim(self):
+        # This is to interface with Dask.
+        return 2
+    
+
     def numpy_nodes(self):
         return np.array(list(iter(self.nodes())))
 
@@ -106,6 +112,10 @@ class DynamicGameInterpolatedFunctions:
     @property
     def dtype(self):
         return self.vf[0].dtype
+
+    @property
+    def ndim(self):
+        return self.vf[0].ndim
 
     def __getitem__(self, key):
         return self.vf[0][key]

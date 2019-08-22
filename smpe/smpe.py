@@ -178,7 +178,7 @@ class DynamicGame(abc.ABC):
                 raise ValueError("Provide intiial attentions with a bool" " dtype.")
             attention = att0
             default_state, _ = self.compute_default_state(
-                interp_funcs, nodes[0].compute()
+                0, interp_funcs, nodes[0].compute()
             )
         logging.debug(f"Starting default state: {default_state}")
 
@@ -337,7 +337,7 @@ class DynamicGame(abc.ABC):
             # Potentially, we have sparsity for this player. Figure out
             # which states it pays attention to.
             default_state, default_state_var = self.compute_default_state(
-                interp_funcs, lines[0, :dim_state].compute()
+                player_ind, interp_funcs, lines[0, :dim_state].compute()
             )
 
             actions_others_default = np.zeros(
@@ -488,15 +488,18 @@ class DynamicGame(abc.ABC):
     def _value(
         self, state, player_ind, value_function, attention, default_state, actions
     ):
-        next_state = self.state_evolution(state, actions)
+        (next_state, next_state_p, _, _) = self._normalize_next_state(
+            self.state_evolution(player_ind, state, actions)
+        )
         if np.any(~attention):
             # There is inattention => calculte the perceived value function
-            next_state = self.sparse_state(state, attention, default_state)
-        cont_value = value_function(next_state)
-        return (
-            self.static_profits(player_ind, state, actions)
-            + self.beta[player_ind] * cont_value
-        )
+            next_state = np.apply_along_axis(
+                lambda x: self.sparse_state(x, attention, default_state), 1, next_state
+            )
+        cont_value = np.apply_along_axis(value_function, 1, next_state)
+        return self.static_profits(player_ind, state, actions) + self.beta[
+            player_ind
+        ] * (next_state_p @ cont_value)
 
     def _neg_value(self, state, player_ind, value_function, actions):
         return -1 * self._value(
@@ -522,7 +525,7 @@ class DynamicGame(abc.ABC):
                 state, player_ind, value_function, attention, default_state, actions
             )
         return ret
-
+ 
     def calculate_value_function(
         self, lines, player_ind, interp_funcs, attention, default_state, chunk_size, eps
     ):
@@ -572,7 +575,9 @@ class DynamicGame(abc.ABC):
     def compute_action_bounds(self, state, player_ind, interp_funcs, actions_others):
         return self.action_bounds[player_ind]
 
-    def compute_default_state(self, interp_funcs, start_state, n_sims=10000):
+    def compute_default_state(
+        self, player_ind, interp_funcs, start_state, n_sims=10000, sim_length=100
+    ):
         states = np.empty((n_sims, start_state.shape[0]))
         state = start_state
         for state_ind in range(n_sims):
@@ -581,7 +586,14 @@ class DynamicGame(abc.ABC):
             for i in range(self.n_players):
                 for j in range(self.n_actions[i]):
                     actions[i, j] = interp_funcs.pf[i][j](state)
-            state = self.state_evolution(state, actions)
+            if state_ind > 0 and state_ind % sim_length == 0:
+                state = start_state
+            else:
+                state_evol = self._normalize_next_state(
+                    self.state_evolution(player_ind, state, actions)
+                )
+                state_ind = np.random.choice(state_evol[0].shape[0], p=state_evol[1])
+                state = state_evol[0][state_ind]
 
         default_state = np.mean(states, axis=0)
         default_state_var = np.var(states, axis=0)
@@ -624,8 +636,28 @@ class DynamicGame(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def state_evolution(self, state, actions):
+    def state_evolution(self, player_ind, state, actions):
         pass
+
+    def _normalize_next_state(self, next_state):
+        if isinstance(next_state, Number):
+            ret = (np.array([[next_state]]), np.ones(1), None, None)
+        elif len(next_state) == 2:
+            ret = (next_state[0], next_state[1], None, None)
+        elif len(next_state) == 3:
+            raise ValueError(
+                "A tuple of length 3 has an ambiguous interpretation."
+                "Use a 4-length tuple with the unused element set to None."
+            )
+        elif len(next_state) == 4:
+            ret = tuple(next_state)
+
+        if ret[0].shape[0] != len(ret[1]):
+            raise ValueError("Mismatch between length of states and probabilities")
+        if not np.isclose(np.sum(ret[1]), 1):
+            raise ValueError("State probabilities must sum to one")
+
+        return ret
 
 
 class ZeroValueFunction(interpolation.DifferentiableInterpolatedFunction):
@@ -665,10 +697,6 @@ class DynamicGameDifferentiable(DynamicGame):
     def static_profits_gradient(self, player_ind, state, actions):
         pass
 
-    @abc.abstractclassmethod
-    def state_evolution_gradient(self, player_ind, state, actions):
-        pass
-
     def compute(
         self,
         interp_base: "interpolation.DifferentiableInterpolatedFunction",
@@ -702,11 +730,19 @@ class DynamicGameDifferentiable(DynamicGame):
 
     def _neg_value_deriv(self, state, player_ind, value_function, actions):
         val = self._neg_value(state, player_ind, value_function, actions)
-        next_state = self.state_evolution(state, actions)
+        state_evol = self.state_evolution(player_ind, state, actions)
         grad = -1 * self.static_profits_gradient(player_ind, state, actions)
-        vf_grad = value_function.derivative(np.array(next_state))
-        evol_grad = self.state_evolution_gradient(player_ind, state, actions)
-        grad -= self.beta[player_ind] * vf_grad @ evol_grad
+        vf = np.apply_along_axis(value_function, 1, state_evol[0])
+        vf_grad = np.apply_along_axis(value_function.derivative, 1, state_evol[0])
+        if state_evol[2] is not None:
+            # vf_grad @ state_evol[2] has dimension (n_samples, 1, n_actions). Remove
+            # middle axis so that multiplication with state_evol (dimension n_samples)
+            # returns a vector with dimension n_actions.
+            grad -= (
+                self.beta[player_ind] * state_evol[1] @ (vf_grad @ state_evol[2])[:, 0]
+            )
+        if state_evol[3] is not None:
+            grad -= state_evol[3] @ vf
 
         if self.n_actions[player_ind] == 1:
             # When the player has only one action, grad will be a float instead

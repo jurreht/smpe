@@ -353,18 +353,13 @@ class DynamicGame(abc.ABC):
                     )
 
             vf = interp_funcs.vf[player_ind]
-            vf_zero = ZeroValueFunction(vf)
             start_actions = [
                 interp_funcs.pf[player_ind][i](default_state)
                 for i in range(self.n_actions[player_ind])
             ]
             start_actions = np.array(start_actions)
             default_action = self.calculate_optimal_action(
-                default_state,
-                start_actions,
-                player_ind,
-                vf_zero,
-                actions_others_default,
+                default_state, start_actions, player_ind, vf, actions_others_default
             )
             logging.debug(
                 f"Default state = {default_state},"
@@ -377,14 +372,35 @@ class DynamicGame(abc.ABC):
             deriv_action_state = self.derivative_action_state(
                 default_state, player_ind, vf, actions_others_default, default_action
             )
-            state_grad = self.state_evolution_gradient(
+            state_evol = self._normalize_next_state(
+                self.state_evolution(player_ind, default_state, actions)
+            )
+            hess_profits_action = self.static_profits_hessian(
                 player_ind, default_state, actions
             )
-            profits_hess = self.static_profits_hessian(
-                player_ind, default_state, actions
-            )
-            vf_hess = vf.second_derivative(default_state)
-            hess_profits_action = profits_hess + state_grad.T @ vf_hess @ state_grad
+            if state_evol[2] is not None:
+                if state_evol[4] is None:
+                    raise ValueError(
+                        "When the cost of attention is positive and a gradient for next state's "
+                        "elements is provided, also provide a Hessian."
+                    )
+                vf_grad = np.apply_along_axis(vf.derivative, 1, state_evol[0])
+                vf_hess = np.apply_along_axis(vf.second_derivative, 1, state_evol[0])
+                hess_profits_action += (
+                    self.beta[player_ind]
+                    * state_evol[1]
+                    @ (np.transpose(state_evol[2], (0, 2, 1)) @ vf_hess @ state_evol[2])
+                )
+                for i in range(dim_state):
+                    hess_profits_action += (
+                        self.beta[player_ind]
+                        * state_evol[1]
+                        @ (vf_grad[:, i] * state_evol[4][:, i])
+                    )
+            if state_evol[4] is not None:
+                # TODO
+                pass
+            # hess_profits_action = profits_hess + state_grad.T @ vf_hess @ state_grad
             benefit_att = default_state_var * np.diag(
                 deriv_action_state.T @ hess_profits_action @ deriv_action_state
             )
@@ -488,7 +504,7 @@ class DynamicGame(abc.ABC):
     def _value(
         self, state, player_ind, value_function, attention, default_state, actions
     ):
-        (next_state, next_state_p, _, _) = self._normalize_next_state(
+        (next_state, next_state_p, *_) = self._normalize_next_state(
             self.state_evolution(player_ind, state, actions)
         )
         if np.any(~attention):
@@ -525,7 +541,7 @@ class DynamicGame(abc.ABC):
                 state, player_ind, value_function, attention, default_state, actions
             )
         return ret
- 
+
     def calculate_value_function(
         self, lines, player_ind, interp_funcs, attention, default_state, chunk_size, eps
     ):
@@ -641,16 +657,25 @@ class DynamicGame(abc.ABC):
 
     def _normalize_next_state(self, next_state):
         if isinstance(next_state, Number):
-            ret = (np.array([[next_state]]), np.ones(1), None, None)
+            ret = (np.array([[next_state]]), np.ones(1), None, None, None, None)
         elif len(next_state) == 2:
-            ret = (next_state[0], next_state[1], None, None)
+            ret = (next_state[0], next_state[1], None, None, None, None)
         elif len(next_state) == 3:
             raise ValueError(
                 "A tuple of length 3 has an ambiguous interpretation."
                 "Use a 4-length tuple with the unused element set to None."
             )
         elif len(next_state) == 4:
+            ret = tuple(next_state) + (None, None)
+        elif len(next_state) == 5:
+            raise ValueError(
+                "A tuple of length 5 has an ambiguous interpretation."
+                "Use a 6-length tuple with the unused element set to None."
+            )
+        elif len(next_state) == 6:
             ret = tuple(next_state)
+        else:
+            raise ValueError("Provide at most 6 elements for the state evolution.")
 
         if ret[0].shape[0] != len(ret[1]):
             raise ValueError("Mismatch between length of states and probabilities")
@@ -658,38 +683,6 @@ class DynamicGame(abc.ABC):
             raise ValueError("State probabilities must sum to one")
 
         return ret
-
-
-class ZeroValueFunction(interpolation.DifferentiableInterpolatedFunction):
-    def __init__(self, based_on):
-        first_state = next(iter(based_on.nodes()))
-        self._dim_state = len(first_state)
-        # Cache the derivative
-        self._deriv = np.zeros(self._dim_state)
-        self._based_on = based_on
-
-    def nodes(self):
-        return self._based_on.nodes()
-
-    def __call__(self, x):
-        return 0.0
-
-    def update(self, values):
-        pass
-
-    @property
-    def num_nodes(self):
-        return self._based_on.num_nodes
-
-    @property
-    def dim_state(self):
-        return self._based_on.dim_state
-
-    def __getitem__(self, key):
-        return self._based_on[key]
-
-    def derivative(self, x):
-        return self._deriv
 
 
 class DynamicGameDifferentiable(DynamicGame):

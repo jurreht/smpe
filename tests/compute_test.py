@@ -321,7 +321,14 @@ class SwitchingModel(DynamicGameDifferentiable):
             -0.5 * (self.n_players - 1) * self.new_consumers
         )
 
-        return (next_state, np.ones(1), next_state_grad, None)
+        return (
+            next_state,
+            np.ones(1),
+            next_state_grad,
+            None,
+            np.zeros((1, self.n_players, 1, 1)),
+            None,
+        )
 
     def static_profits_gradient(self, player_ind, state, actions):
         pi = actions[player_ind][0]
@@ -399,7 +406,6 @@ def test_switching_model_no_att_cost(dask_client, eq, mc0):
         )
 
 
-@pytest.mark.xfail
 @pytest.mark.parametrize("eq", switching_eqs)
 @pytest.mark.parametrize("mc0", (0, 0.5))
 def test_switching_model_with_att_cost(dask_client, eq, mc0):

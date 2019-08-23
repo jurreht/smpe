@@ -44,6 +44,8 @@ def test_normalize_next_state_scalar(simple_game, next_state):
         np.array([1.0]),
         None,
         None,
+        None,
+        None,
     )
 
 
@@ -78,6 +80,8 @@ def test_normalize_next_state_2d_array(simple_game, next_state):
         next_state[1],
         None,
         None,
+        None,
+        None,
     )
 
 
@@ -108,4 +112,30 @@ def test_normalize_next_state_4d_array(simple_game, next_state):
         next_state[1],
         next_state[2],
         next_state[3],
+        None,
+        None,
     )
+
+
+@given(next_state=draws_with_probabilities_array(dim=5))
+def test_normalize_next_state_5d_array_error(simple_game, next_state):
+    with pytest.raises(ValueError):
+        simple_game._normalize_next_state(next_state)
+
+
+@given(next_state=draws_with_probabilities_array(dim=6))
+def test_normalize_next_state_6d(simple_game, next_state):
+    assert simple_game._normalize_next_state(next_state) == (
+        next_state[0],
+        next_state[1],
+        next_state[2],
+        next_state[3],
+        next_state[4],
+        next_state[5],
+    )
+
+
+@given(next_state=draws_with_probabilities_array(dim=7))
+def test_normalize_next_state_7d_array_error(simple_game, next_state):
+    with pytest.raises(ValueError):
+        simple_game._normalize_next_state(next_state)

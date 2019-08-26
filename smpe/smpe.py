@@ -168,7 +168,7 @@ class DynamicGame(abc.ABC):
 
         if att0 is None:
             attention = np.ones((self.n_players, interp_funcs.shape[1]), dtype=np.bool_)
-            default_state = np.zeros(interp_funcs.shape[0])
+            default_state = np.zeros(interp_funcs.shape[1])
         else:
             if att0.shape[0] != self.n_players:
                 raise ValueError("Provide initial attentions for every" " player.")

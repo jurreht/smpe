@@ -735,7 +735,7 @@ class DynamicGameDifferentiable(DynamicGame):
                 self.beta[player_ind] * state_evol[1] @ (vf_grad @ state_evol[2])[:, 0]
             )
         if state_evol[3] is not None:
-            grad -= state_evol[3] @ vf
+            grad -= self.beta[player_ind] * state_evol[3] @ vf
 
         if self.n_actions[player_ind] == 1:
             # When the player has only one action, grad will be a float instead

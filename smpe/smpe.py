@@ -482,8 +482,7 @@ class DynamicGame(abc.ABC):
         )
 
         if not res.success:
-            # TODO
-            pass
+            raise ValueError("Optimization did not converge")
         else:
             return res.x
 

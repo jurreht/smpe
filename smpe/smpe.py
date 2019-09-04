@@ -568,7 +568,7 @@ class DynamicGame(abc.ABC):
                 vf_diff = self.value_function_norm(
                     calc_value_function, prev_value_function
                 )
-                logging.debug(f'Inner loop value function diff = {vf_diff}')
+                logging.debug(f"Inner loop value function diff = {vf_diff}")
                 if vf_diff <= eps:
                     break
 

@@ -686,7 +686,7 @@ class DynamicGame(abc.ABC):
 
 
 class DynamicGameDifferentiable(DynamicGame):
-    @abc.abstractclassmethod
+    @abc.abstractmethod
     def static_profits_gradient(self, player_ind, state, actions):
         pass
 

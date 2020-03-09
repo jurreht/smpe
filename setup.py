@@ -1,4 +1,4 @@
-from distutils.core import setup
+from setuptools import setup
 
 setup(
     name="SMPE",
@@ -16,5 +16,6 @@ setup(
         "scipy >= 1.2.0",
         "numba >= 0.41",
         "xxhash >= 1.3.0",
+        "julia",
     ],
 )

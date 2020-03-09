@@ -1,4 +1,5 @@
 import dask.distributed
+import julia
 import pytest
 
 
@@ -25,3 +26,16 @@ def dask_client(request):
     yield client
     client.close()
     cluster.close()
+
+@pytest.fixture(scope="session")
+def SMPE(request):
+    # Make sure pyjulia is installed properly
+    try:
+        from julia import PyCall
+    except:
+        julia.install()
+
+    from julia import Pkg
+    Pkg.activate(".")
+    from julia import SMPE
+    return SMPE

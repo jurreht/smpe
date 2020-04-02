@@ -1,0 +1,19 @@
+name = "SMPE"
+uuid = "23f8f165-d857-4f69-8024-5adec4342aa5"
+authors = ["Jurre H. Thiel"]
+version = "0.1.0"
+
+[deps]
+Atom = "c52e3926-4ff0-5f6e-af25-54175e0327b1"
+Debugger = "31a5f54b-26ea-5ae9-a837-f05ce5417438"
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+Juno = "e5e0dc1b-0480-54bc-9374-aad01c23163d"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+Rebugger = "ee283ea6-eecd-56e3-beb3-83eb4d3c31e9"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+SharedArrays = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

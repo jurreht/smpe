@@ -1,6 +1,8 @@
 using Distributed
 
-addprocs(4; exeflags="--project")
+if nprocs() < 4
+	addprocs(4; exeflags="--project")
+end
 
 using Logging
 using Test

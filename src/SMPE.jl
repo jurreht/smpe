@@ -300,7 +300,7 @@ function calculate_attention(
     interp_value_function,
     actions_others,
     interp_policy_funcs,
-    options
+    options::SMPEOptions
 )
     att_cost = attention_cost(game, player_ind)
     default_actions = calculate_optimal_actions(

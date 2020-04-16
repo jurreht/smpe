@@ -5,8 +5,8 @@ version = "0.1.0"
 
 [deps]
 Atom = "c52e3926-4ff0-5f6e-af25-54175e0327b1"
+Cuba = "8a292aeb-7a57-582c-b821-06e4c11590b1"
 Debugger = "31a5f54b-26ea-5ae9-a837-f05ce5417438"
-DiffResults = "163ba53b-c6d8-5494-b064-1a9d43ac40c5"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"

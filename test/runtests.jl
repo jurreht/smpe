@@ -338,7 +338,3 @@ somaini_einav_static_eq(mc, grid) = map(mci -> fill(
 		@test !any(att)
 	end
 end
-#
-game = StochasticSwitchingModel(2, [0, 0], .3, 1, .8, 0, 0, .01)
-grid = [range(0, 1, length=10), range(0, 1, length=10), range(.1, 2, length=10), range(.1, 2, length=10)]
-@time pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)

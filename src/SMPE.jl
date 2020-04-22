@@ -45,6 +45,7 @@ abstract type DynamicGame end
     eps_outer::Real = 1e-4
     eps_inner::Real = 1e-4
     eps_contraction::Real = 1e-4
+    optim_method::Optim.FirstOrderOptimizer = LBFGS()
     optim_options::Optim.Options = Optim.Options()
     state_sim_eps::Real = 1e-2
     state_sim_min_sims::Integer = 100
@@ -623,7 +624,7 @@ function maximize_payoff(
             lb,
             ub,
             x0,
-            Fminbox(LBFGS()),
+            Fminbox(options.optim_method),
             options.optim_options
         )
     else
@@ -632,7 +633,7 @@ function maximize_payoff(
             x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options),
             (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options),
             x0,
-            LBFGS(),
+            LBFGS(options.optim_method),
             options.optim_options
         )
     end

@@ -28,6 +28,7 @@ end
 # This allows us to comment out "using Distributed" during development
 # to get serial execution no matter what.
 if !@isdefined(Distributed)
+    pmap(::AbstractWorkerPool, args) = map(args...)
     pmap(args...) = map(args...)
     macro sync(ex)
         return :( $(esc(ex)) )
@@ -49,7 +50,7 @@ abstract type DynamicGame end
     optim_options::Optim.Options = Optim.Options()
     state_sim_eps::Real = 1e-2
     state_sim_min_sims::Integer = 100
-    contraction_batch_size::Integer = 1000
+    contraction_batch_size::Integer = 10000
     integration_rel_tol::Real = 1e-1
     integration_abs_tol::Real = 1e-3
 end
@@ -249,26 +250,31 @@ function innerloop_for_player!(
         @debug "Attention vector = $(attention)"
 
         @info "Calculating policy function..."
+        pool = CachingPool(workers())
         if all(attention)
             # The agent pays attention to the full state. This means that we
             # do not interpolation to predict the other agents' actions as the
             # relevant states will be precisely the elements in states.
             relevant_nodes = Iterators.product(nodes...)
-            calc = pmap(
-                node_ind -> calculate_optimal_actions(
-                    game,
-                    transform_state(game, collect(relevant_nodes[node_ind])),
-                    player_ind,
-                    interp_value_function,
-                    prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
-                    [Slices(pf, dim_rectangular_state(game) + 1)[node_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
-                    options
-                ),
-                # relevant_nodes supports fast linear indexing, while calc_policy_functions
-                # does not. Hence we get the indices from calc_policy_functions
-                # to get a CartesianIndex
-                eachindex(Slices(calc_policy_functions[1], dim_rectangular_state(game) + 1))
-            )
+            # Closed over voriables are only transmitted to workers once
+            calc = let game = game, relevant_nodes = relevant_nodes, options=options, player_ind = player_ind, prev_optimal = prev_optimal, interp_value_function = interp_value_function, calc_policy_functions = calc_policy_functions
+                pmap(
+                    node_ind -> calculate_optimal_actions(
+                        game,
+                        transform_state(game, collect(relevant_nodes[node_ind])),
+                        player_ind,
+                        interp_value_function,
+                        prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
+                        [Slices(pf, dim_rectangular_state(game) + 1)[node_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
+                        options
+                    ),
+                    pool,
+                    # relevant_nodes supports fast linear indexing, while calc_policy_functions
+                    # does not. Hence we get the indices from calc_policy_functions
+                    # to get a CartesianIndex
+                    eachindex(Slices(calc_policy_functions[1], dim_rectangular_state(game) + 1))
+                )
+            end
         else
             # Substitute default state for actual state if agent does not pay attention
             default_node = transform_state_back(game, default_state)
@@ -276,18 +282,21 @@ function innerloop_for_player!(
                 attention[i] ? states[i] : [default_node[i]]
                 for i in 1:dim_rectangular_state(game)
             )...)
-            calc = pmap(
-                state -> calculate_optimal_actions(
-                    game,
-                    state,
-                    player_ind,
-                    interp_value_function,
-                    prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
-                    [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
-                    options
-                ),
-                map(node -> collect(transform_state(game, node)), relevant_nodes),
-            )
+            calc = let game=game, player_ind=player_ind, prev_optimal=prev_optimal, interp_value_funtion=interp_value_function, options=options, interp_policy_functions=interp_policy_functions
+                pmap(
+                    state -> calculate_optimal_actions(
+                        game,
+                        state,
+                        player_ind,
+                        interp_value_function,
+                        prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
+                        [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
+                        options
+                    ),
+                    pool,
+                    map(node -> collect(transform_state(game, node)), relevant_nodes),
+                )
+            end
             # Repeat optimal policies across states that the agent does not pay attention to
             calc = repeat(calc; outer=[attention[i] ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)])
         end
@@ -738,14 +747,21 @@ function calculate_value_function(
         ),
         interp_policy_functions
     )
-    static_payoff_grid = pmap(
-        zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end]),
-        zip(relevant_states, actions_grid...)
-    )
-    next_state_grid = pmap(
-        zipped -> compute_next_state(game, zipped[1], player_ind, zipped[2:end]),
-        zip(relevant_states, actions_grid...)
-    )
+    pool = CachingPool(workers())
+    static_payoff_grid = let game=game, player_ind=player_ind
+        pmap(
+            zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end]),
+            pool,
+            zip(relevant_states, actions_grid...)
+        )
+    end
+    next_state_grid = let game=game, player_ind=player_ind
+        pmap(
+            zipped -> compute_next_state(game, zipped[1], player_ind, zipped[2:end]),
+            pool,
+            zip(relevant_states, actions_grid...)
+        )
+    end
     # # Allow the GC to take care of this
     relevant_states = nothing
     actions_grid = nothing
@@ -757,38 +773,32 @@ function calculate_value_function(
     ]
 
     while true
-        calc_value_function = pmap(
-            zipped -> map(
-                z -> calculate_value(
-                    game,
-                    z[2],
-                    player_ind,
-                    interp_value_function,
-                    z[1],
-                    options
+        calc_value_function = let game=game, player_ind=player_ind, options=options, interp_value_function=interp_value_function
+            pmap(
+                zipped -> map(
+                    z -> calculate_value(
+                        game,
+                        z[2],
+                        player_ind,
+                        interp_value_function,
+                        z[1],
+                        options
+                    ),
+                    zipped
                 ),
-                zipped
-            ), Iterators.partition(
-                zip(static_payoff_grid, next_state_grid),
-                options.contraction_batch_size
+                pool,
+                Iterators.partition(
+                    zip(static_payoff_grid, next_state_grid),
+                    options.contraction_batch_size
+                )
             )
-        )
+        end
         calc_value_function = reshape(
             vcat(calc_value_function...),
             size(relevant_nodes)
         )
         calc_value_function = repeat(calc_value_function, repeat_calc_vf...)
 
-        #
-        # @sync @distributed for (i, state) in enumerate(cartesian_states)
-        #     calc_value_function[i] = calculate_value(
-        #         game,
-        #         perceived_state(game, state, attention, default_state),
-        #         player_ind,
-        #         interp_value_function,
-        #         interp_policy_functions
-        #     )
-        # end
         if !isnothing(prev_value_function)
             diff = value_function_norm(game, calc_value_function, prev_value_function)
             @debug "Contraction mapping step = $(diff)"
@@ -799,7 +809,6 @@ function calculate_value_function(
         interp_value_function = interpolate_value_function(game, nodes, calc_value_function)
         prev_value_function = copy(calc_value_function)
     end
-    # return sdata(calc_value_function), interp_value_function
     return calc_value_function, interp_value_function
 end
 

@@ -55,37 +55,68 @@ end
 
 DEFAULT_OPTIONS = SMPEOptions()
 
+"""
+Wrapper type for interpolated functions. Stores the game for which the function
+is interpolated with the function. The purpose of this is to support games
+which are analyzed on non-rectangular grids. Implemen transform_state()
+and related methods, to transform from a rectangular to non-rectangular grid.
+The domain of the wrapper type is the transformeed (non-rectangular) state and
+it takes care of the chain rule when calculating the graient or hessian.
+"""
+struct TransformedInterpolation{S<:AbstractInterpolation{N, T, NT} where {N, T, NT}, G<:DynamicGame}
+    interpolation::S
+    game::G
+end
+
+(itp::TransformedInterpolation)(x...) = itp.interpolation(transform_state_back(itp.game, x)...)
+Base.ndims(itp::TransformedInterpolation) = ndims(itp.interpolation)
+Interpolations.gradient(itp::TransformedInterpolation, x...) = (
+    transpose(transform_state_back_jac(itp.game, x)) *
+    Interpolations.gradient(itp.interpolation, transform_state_back(itp.game, x)...)
+)
+function Interpolations.hessian(itp::TransformedInterpolation, x...)
+    x_trans_back = transform_state_back(itp.game, x)
+    grad_v = Interpolations.gradient(itp.interpolation, x_trans_back...)
+    hess_v = Interpolations.hessian(itp.interpolation, x_trans_back...)
+    jac_trans = transform_state_back_jac(itp.game, x)
+    hess_trans = transform_state_back_hessian(itp.game, x)
+    return (
+        transpose(jac_trans) * hess_v * jac_trans +
+        sum(hess_trans[i, :, :] .* grad_v[i] for i in 1:dim_rectangular_state(itp.game))
+    )
+end
+
 function compute_equilibrium(
     game::DynamicGame,
-    states::Union{AbstractRange, Vector{<:AbstractRange}},
+    nodes::Union{AbstractRange, Vector{<:AbstractRange}};
     x0::Union{Nothing, AbstractVector{<:AbstractVector{<:Number}}, AbstractArray{<:Number, 2}}=nothing,
-    options::SMPEOptions=DEFAULT_OPTIONS;
+    options::SMPEOptions=DEFAULT_OPTIONS,
     return_interpolated=true
 )
-    if isa(states, AbstractRange)
-        states = [states]
+    if isa(nodes, AbstractRange)
+        nodes = [nodes]
     end
-    if size(states, 1) != dim_state(game)
-        throw(ArgumentError("State nodes must be of dimension dim_state=$(dim_state(game))"))
+    if size(nodes, 1) != dim_rectangular_state(game)
+        throw(ArgumentError("State nodes must be of dimension dim_rectangular_state=$(dim_rectangular_state(game))"))
     end
-    n_states = prod(length(s) for s in states)
-    ALLSTATES = fill(:, dim_state(game))
+    n_nodes = prod(length(s) for s in nodes)
+    ALLNODES = fill(:, dim_rectangular_state(game))
 
-    calc_policy_functions = create_init_actions(game, states, x0)
+    calc_policy_functions = create_init_actions(game, nodes, x0)
     interp_policy_functions = map(
         i -> interpolate_policy_function(
             game,
-            states,
+            nodes,
             calc_policy_functions[i]
         ),
         1:num_players(game)
     )
-    calc_value_functions = initialize_value_functions(game, states)
+    calc_value_functions = initialize_value_functions(game, nodes)
     interp_value_functions = map(
         i -> interpolate_value_function(
             game,
-            states,
-            calc_value_functions[i, ALLSTATES...]
+            nodes,
+            calc_value_functions[i, ALLNODES...]
         ),
         1:num_players(game)
     )
@@ -97,9 +128,9 @@ function compute_equilibrium(
     while !all(converged)
         for player_ind = 1:num_players(game)
             # calc_policy_functions and interp_policy_functions get modified in place
-            calc_value_functions[player_ind, ALLSTATES...], interp_value_functions[player_ind], attention[player_ind, :] = innerloop_for_player!(
+            calc_value_functions[player_ind, ALLNODES...], interp_value_functions[player_ind], attention[player_ind, :] = innerloop_for_player!(
                 game,
-                states,
+                nodes,
                 player_ind,
                 interp_value_functions[player_ind],
                 calc_policy_functions,
@@ -111,8 +142,8 @@ function compute_equilibrium(
             if prev_optimal[player_ind]  # At least one iteration done before => can check convergence
                 vf_norm = value_function_norm(
                     game,
-                    calc_value_functions[player_ind, ALLSTATES...],
-                    prev_value_functions[player_ind, ALLSTATES...]
+                    calc_value_functions[player_ind, ALLNODES...],
+                    prev_value_functions[player_ind, ALLNODES...]
                 )
                 @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
                 if vf_norm < options.eps_outer
@@ -130,7 +161,7 @@ function compute_equilibrium(
             # this to innerloop_for_player().
             prev_optimal[player_ind] = true
 
-            prev_value_functions[player_ind, ALLSTATES...] = calc_value_functions[player_ind, ALLSTATES...]
+            prev_value_functions[player_ind, ALLNODES...] = calc_value_functions[player_ind, ALLNODES...]
         end
     end
 
@@ -141,10 +172,10 @@ function compute_equilibrium(
     end
 end
 
-function create_init_actions(game::DynamicGame, states, x0)
+function create_init_actions(game::DynamicGame, nodes, x0)
     if isnothing(x0)
         return map(
-            i -> zeros((length(s) for s in states)..., num_actions(game, i)),
+            i -> zeros((length(s) for s in nodes)..., num_actions(game, i)),
             1:num_players(game)
         )
     else
@@ -174,14 +205,14 @@ function create_init_actions(game::DynamicGame, states, x0)
     end
 end
 
-initialize_value_functions(game::DynamicGame, states) = zeros(
+initialize_value_functions(game::DynamicGame, nodes) = zeros(
     num_players(game),
-    (length(state_base) for state_base in states)...
+    (length(node_base) for node_base in nodes)...
 )
 
 function innerloop_for_player!(
     game::DynamicGame,
-    states,
+    nodes,
     player_ind,
     interp_value_function,
     calc_policy_functions,
@@ -193,7 +224,7 @@ function innerloop_for_player!(
     calc_value_func = nothing
     attention = nothing
     interp_value_func = nothing
-    state_dims = (length(s) for s in states)
+    node_dims = (length(s) for s in nodes)
 
     @info "Inner loop for player $(player_ind)"
 
@@ -203,7 +234,6 @@ function innerloop_for_player!(
             default_state = collect(compute_default_state(game, player_ind))
             attention = calculate_attention(
                 game,
-                states,
                 default_state,
                 player_ind,
                 interp_value_function,
@@ -222,55 +252,56 @@ function innerloop_for_player!(
             # The agent pays attention to the full state. This means that we
             # do not interpolation to predict the other agents' actions as the
             # relevant states will be precisely the elements in states.
-            relevant_states = Iterators.product(states...)
+            relevant_nodes = Iterators.product(nodes...)
             calc = pmap(
-                state_ind -> calculate_optimal_actions(
+                node_ind -> calculate_optimal_actions(
                     game,
-                    collect(relevant_states[state_ind]),
+                    transform_state(game, collect(relevant_nodes[node_ind])),
                     player_ind,
                     interp_value_function,
-                    prev_optimal ? Slices(calc_policy_functions[player_ind], dim_state(game) + 1)[state_ind] : nothing,
-                    [Slices(pf, dim_state(game) + 1)[state_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
+                    prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
+                    [Slices(pf, dim_rectangular_state(game) + 1)[node_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
                     options
                 ),
-                # cartesian_states supports fast linear indexing, while calc_policy_functions
+                # relevant_nodes supports fast linear indexing, while calc_policy_functions
                 # does not. Hence we get the indices from calc_policy_functions
                 # to get a CartesianIndex
-                eachindex(Slices(calc_policy_functions[1], dim_state(game) + 1))
+                eachindex(Slices(calc_policy_functions[1], dim_rectangular_state(game) + 1))
             )
         else
             # Substitute default state for actual state if agent does not pay attention
-            relevant_states = Iterators.product((
-                attention[i] ? states[i] : [default_state[i]]
-                for i in 1:dim_state(game)
+            default_node = transform_state_back(game, default_state)
+            relevant_nodes = Iterators.product((
+                attention[i] ? states[i] : [default_node[i]]
+                for i in 1:dim_rectangular_state(game)
             )...)
             calc = pmap(
                 state -> calculate_optimal_actions(
                     game,
-                    collect(state),
+                    state,
                     player_ind,
                     interp_value_function,
                     prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
                     [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
                     options
                 ),
-                relevant_states
+                map(node -> collect(transform_state(game, node)), relevant_nodes),
             )
             # Repeat optimal policies across states that the agent does not pay attention to
-            calc = repeat(calc; outer=[attention[i] ? 1 : length(states[i]) for i in 1:dim_state(game)])
+            calc = repeat(calc; outer=[attention[i] ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)])
         end
         # We now have an Array{Array{..., 1}, n_dims}, but need a single
         # Array{..., n_actions + 1}. JuliennedArrays.Align() achieves this.
-        calc_policy_functions[player_ind] = Align(calc, fill(False(), dim_state(game))..., True())
+        calc_policy_functions[player_ind] = Align(calc, fill(False(), dim_rectangular_state(game))..., True())
         interp_policy_functions[player_ind] = interpolate_policy_function(
-            game, states, calc_policy_functions[player_ind]
+            game, nodes, calc_policy_functions[player_ind]
         )
 
         @info "Contraction mapping..."
         calc_value_func, interp_value_func = calculate_value_function(
             game,
-            states,
-            relevant_states,
+            nodes,
+            relevant_nodes,
             attention,
             player_ind,
             interp_value_function,
@@ -297,7 +328,6 @@ end
 
 function calculate_attention(
     game::DynamicGame,
-    states,
     default_state,
     player_ind,
     interp_value_function,
@@ -502,10 +532,12 @@ function calculate_derivative_actions_state(
         sum(deterministic_states), length(x), length(x)
     )[:, select_els, select_els]
     value_func_grad = value_function_gradient_for_state(
+        game,
         interp_value_function,
         next_state,
         options)
     value_func_hess = value_function_hessian_for_state(
+        game,
         interp_value_function,
         next_state,
         options)#[deterministic_states, deterministic_states]
@@ -624,7 +656,7 @@ function calculate_negative_payoff(
     next_state = compute_next_state(game, state, player_ind, actions_all)
     payoff = payoff_now + (
         discount_factor(game, player_ind) *
-        value_function_for_state(interp_value_function, next_state, options)
+        value_function_for_state(game, interp_value_function, next_state, options)
     )
     return -1 * payoff
 end
@@ -675,32 +707,29 @@ interpolate_policy_function(game::DynamicGame, states, calc_policy_function) = [
 ]
 
 function interpolate_function(game::DynamicGame, states, vals)
-    itp = interpolate(vals, BSpline(Quadratic(Free(OnGrid()))))
+    itp = interpolate(vals, BSpline(Cubic(Line(OnGrid()))))
     # We allow extrapolation to prevent errors when the due to floating point
     # rounding we are just outside the grid. It is not advised to try to
     # extrapolate much beyond that
-    return extrapolate(Interpolations.scale(itp, states...), Interpolations.Flat())
+    etp = extrapolate(Interpolations.scale(itp, states...), Interpolations.Flat())
+    return TransformedInterpolation(etp, game)
 end
 
 function calculate_value_function(
     game::DynamicGame,
-    states,
-    relevant_states,
+    nodes,
+    relevant_nodes,
     attention,
     player_ind,
     interp_value_function,
-    interp_policy_functions::AbstractVector{<:AbstractVector{<:AbstractInterpolation{T, N, IT}}},
+    interp_policy_functions,
     options::SMPEOptions
-) where {N, T, IT}
-    # calc_value_function = SharedArray{T, N}((length(s) for s in states)...)
+)
     calc_value_function = nothing
     prev_value_function = nothing
-    # cartesian_states = map(
-    #     state -> perceived_state(game, state, attention, default_state),
-    #     Iterators.product(states...)
-    # )
 
     # Cache static payoffs and state transitions
+    relevant_states = map(node -> transform_state(game, node), relevant_nodes)
     actions_grid = map(
         pf -> map(
             state -> eval_policy_function(pf, state),
@@ -716,12 +745,14 @@ function calculate_value_function(
         zipped -> compute_next_state(game, zipped[1], player_ind, zipped[2:end]),
         zip(relevant_states, actions_grid...)
     )
-    actions_grid = nothing  # Allow the GC to take care of this
+    # # Allow the GC to take care of this
+    relevant_states = nothing
+    actions_grid = nothing
 
     repeat_calc_vf = [
         indim == 1 ? outdim : 1
         for (indim, outdim)
-        in zip(size(relevant_states), (length(s) for s in states))
+        in zip(size(relevant_nodes), (length(s) for s in nodes))
     ]
 
     while true
@@ -743,7 +774,7 @@ function calculate_value_function(
         )
         calc_value_function = reshape(
             vcat(calc_value_function...),
-            size(relevant_states)
+            size(relevant_nodes)
         )
         calc_value_function = repeat(calc_value_function, repeat_calc_vf...)
 
@@ -764,7 +795,7 @@ function calculate_value_function(
                 break
             end
         end
-        interp_value_function = interpolate_value_function(game, states, calc_value_function)
+        interp_value_function = interpolate_value_function(game, nodes, calc_value_function)
         prev_value_function = copy(calc_value_function)
     end
     # return sdata(calc_value_function), interp_value_function
@@ -789,6 +820,7 @@ calculate_value(
     static_payoff +
     discount_factor(game, player_ind) *
     value_function_for_state(
+        game,
         interp_value_function,
         next_state,
         options
@@ -796,7 +828,8 @@ calculate_value(
 )
 
 function value_function_for_state(
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    game::DynamicGame,
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     state::AbstractVector{<:Real},
     options::SMPEOptions
 )::T where {T<:Real, N, NT}
@@ -804,24 +837,29 @@ function value_function_for_state(
 end
 
 function value_function_for_state(
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    game::DynamicGame,
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     state::AbstractVector{<:Union{<:Real, ContinuousUnivariateDistribution}},
     options::SMPEOptions
 )::T where {T<:Real, N, NT}
     deterministic_states = map(s -> isa(s, T), state)
+    node = transform_state_back(game, state)
+    deterministic_nodes = map(s -> isa(s, T), node)
     return integrate_fn_over_stochastic_states(
+        game,
         # We need an Array here since that is what is needed for numerical integration
-        x -> [value_function_for_state(interp_value_function, x, options)],
+        x -> [value_function_for_state(game, interp_value_function, x, options)],
         1,
         interpolation_bounds(interp_value_function),
-        state,
-        deterministic_states,
+        node,
+        deterministic_nodes,
         options
     )[1]
 end
 
 function value_function_gradient_for_state(
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    game::DynamicGame,
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     state::AbstractVector{<:Real},
     options::SMPEOptions
 )::Vector{T} where {T<:Real, N, NT}
@@ -829,17 +867,21 @@ function value_function_gradient_for_state(
 end
 
 function value_function_gradient_for_state(
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    game::DynamicGame,
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     state::AbstractVector{<:Union{Real, ContinuousUnivariateDistribution}},
     options::SMPEOptions
 )::Vector{T} where {T<:Real, N, NT}
     deterministic_states = map(s -> isa(s, T), state)
+    node = transform_state_back(game, state)
+    deterministic_nodes = map(s -> isa(s, T), node)
     return integrate_fn_over_stochastic_states(
-        x -> value_function_gradient_for_state(interp_value_function, x, options)[deterministic_states],
+        game,
+        x -> value_function_gradient_for_state(game, interp_value_function, x, options)[deterministic_states],
         sum(deterministic_states),
         interpolation_bounds(interp_value_function),
-        state,
-        deterministic_states,
+        node,
+        deterministic_nodes,
         options
     )
 end
@@ -849,7 +891,7 @@ function value_function_gradient_for_actions(
     state::AbstractVector{T},
     next_state::AbstractVector{<:Real},
     player_ind,
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     actions,
     actions_others,
     options::SMPEOptions
@@ -863,7 +905,7 @@ function value_function_gradient_for_actions(
         ),
         actions
     )
-    next_vf_grad = value_function_gradient_for_state(interp_value_function, next_state, options)
+    next_vf_grad = value_function_gradient_for_state(game, interp_value_function, next_state, options)
     Interpolations.gradient(interp_value_function, state...)
     return transpose(next_state_jac) * next_vf_grad
 end
@@ -873,14 +915,16 @@ function value_function_gradient_for_actions(
     state::AbstractVector{T},
     next_state::AbstractVector{<:Union{<:Real, ContinuousUnivariateDistribution}},
     player_ind,
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     actions,
     actions_others,
     options::SMPEOptions
 )::Vector{T} where {T<:Real, N, NT}
-    # Only differentiate wrt the non-stochastic parts of the state
+    next_node = transform_state_back(game, next_state)
+    # Only differentiate wrt the non-stochastic parts of the state/node
     # (i.e. it is assumed that the stochastic state transitions are exogenous)
     deterministic_states = map(s -> isa(s, T), next_state)
+    deterministic_nodes = map(s -> isa(s, T), next_node)
     # We can hence take the Jacobian of the state evolution wrt to
     # the deterministic states only
     next_state_jac = ForwardDiff.jacobian(
@@ -897,11 +941,12 @@ function value_function_gradient_for_actions(
     # Integrate out the random variables in the gradient of the value function
     # Integration needs [0, 1] box => use a change of variable
     next_vf_grad = integrate_fn_over_stochastic_states(
-        x -> value_function_gradient_for_state(interp_value_function, x, options)[deterministic_states],
+        game,
+        x -> value_function_gradient_for_state(game, interp_value_function, x, options)[deterministic_states],
         sum(deterministic_states),
         interpolation_bounds(interp_value_function),
-        next_state,
-        deterministic_states,
+        next_node,
+        deterministic_nodes,
         options
     )
     return transpose(next_state_jac) * next_vf_grad
@@ -919,33 +964,36 @@ function calculate_next_state_deterministic_part(
 end
 
 function integrate_fn_over_stochastic_states(
+    game::DynamicGame,
     fn,
     dim_fn,
     domain_fn,
-    state,
-    deterministic_states,
+    node,
+    deterministic_nodes,
     options::SMPEOptions
 )
-    stochastic_states = state[.!deterministic_states]
+    stochastic_nodes = node[.!deterministic_nodes]
     change_var = map(
         x -> make_scaler(x...),
-        zip(stochastic_states, domain_fn[.!deterministic_states])
+        zip(stochastic_nodes, domain_fn[.!deterministic_nodes])
     )
-    integrand_state = [
+    integrand_node = [
         is_deterministic ? x : NaN
         for (is_deterministic, x) in
-        zip(deterministic_states, state)
+        zip(deterministic_nodes, node)
     ]
     integral = vegas(
         (x, f) -> begin
-            integrand_state[.!deterministic_states] = [
+            integrand_node[.!deterministic_nodes] = [
                 cv[1](y) for (cv, y) in zip(change_var, x)
             ]
+            integrand_state = transform_state(game, integrand_node)
+            transform_jac = transform_state_jac(game, integrand_node)
             cv_jac = prod(cv[2](y) for (cv, y) in zip(change_var, x))
-            weight = prod(pdf(s, y) for (s, y) in zip(stochastic_states, x))
-            f[:] = fn(integrand_state) * cv_jac * weight
+            weight = prod(pdf(s, y) for (s, y) in zip(stochastic_nodes, x))
+            f[:] = fn(integrand_state) * cv_jac * weight * abs(det(transform_jac))
         end,
-        length(stochastic_states),
+        length(stochastic_nodes),
         dim_fn;
         rtol=options.integration_rel_tol,
         atol=options.integration_abs_tol
@@ -985,48 +1033,53 @@ function make_scaler(dist::ContinuousUnivariateDistribution, domain)
 end
 
 function value_function_hessian_for_state(
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    game::DynamicGame,
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     states::AbstractVector{T},
     options::SMPEOptions
 )::Matrix{T} where {T<:Real, N, NT}
-    if ndims(interp_value_function) <= 3
-        return Interpolations.hessian(interp_value_function, states...)
-    else
-        # There is a bug in Interpolations.jl for computing the Hssian when
-        # ndim >= 4. See https://github.com/JuliaMath/Interpolations.jl/issues/364
-        return ForwardDiff.hessian(x -> interp_value_function(x...), states)
-    end
+    # There is no analytic hessian available for extrapolated functions
+    # There is also a bug in Interpolations.jl for computing the Hssian when
+    # ndim >= 4. See https://github.com/JuliaMath/Interpolations.jl/issues/364
+    # So we just use ForwardDiff
+    return ForwardDiff.hessian(x -> interp_value_function(x...), states)
 end
 
 function value_function_hessian_for_state(
-    interp_value_function::AbstractInterpolation{T, N, NT},
+    game::DynamicGame,
+    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
     state::AbstractVector{<:Union{Real, ContinuousUnivariateDistribution}},
     options::SMPEOptions
 )::Matrix{T} where {T<:Real, N, NT}
+    node = transform_state_back(game, state)
     deterministic_states = map(s -> isa(s, T), state)
+    deterministic_nodes = map(s -> isa(s, T), node)
     n_deterministic = sum(deterministic_states)
     hess_vectorized = integrate_fn_over_stochastic_states(
+        game,
         # Integration only possible over vectors. Hence vectorize and reshape below
-        x -> vec(value_function_hessian_for_state(interp_value_function, x, options)[deterministic_states, deterministic_states]),
+        x -> vec(value_function_hessian_for_state(game, interp_value_function, x, options)[deterministic_states, deterministic_states]),
         n_deterministic^2,
         interpolation_bounds(interp_value_function),
-        state,
-        deterministic_states,
+        node,
+        deterministic_nodes,
         options
     )
     return reshape(hess_vectorized, n_deterministic, n_deterministic)
 end
 
-function interpolation_bounds(interp::AbstractInterpolation)
-    vf_bounds = bounds(interp)
+function interpolation_bounds(interp::TransformedInterpolation)
+    itp = interp.interpolation
+    # Extrapolated functions have no bounds, give the bounds of the
+    # underlying interpolated function
+    vf_bounds = (isa(itp, AbstractExtrapolation)
+        ? bounds(parent(itp))
+        : bounds(itp)
+    )
     return collect(zip(
         map(minimum, vf_bounds),
         map(maximum, vf_bounds)))
 end
-
-# Extrapolated functions have no bounds, give the bounds of the
-# underlying interpolated function
-interpolation_bounds(interp::AbstractExtrapolation) = interpolation_bounds(parent(interp))
 
 compute_optimization_x0(
     game::DynamicGame, state, player_ind, interp_value_function, actions
@@ -1074,6 +1127,8 @@ Base.getindex(it::Base.Iterators.Enumerate{<:Any}, ind::UnitRange) = [
 ]
 Base.keys(it::Base.Iterators.Enumerate{<:Base.Iterators.ProductIterator{<:Any}}) = 1:length(it)
 
+
+
 #
 # The methods below must be implemented by the DynamicGame concrete type
 #
@@ -1085,5 +1140,57 @@ static_payoff(g::DynamicGame, state, player_ind, actions) = throw("Concrete subt
 compute_next_state(g::DynamicGame, state, player_ind, actions) = throw("Concrete subtypes of DynamicGame must implement compute_next_state()")
 attention_cost(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement attention_cost()")
 compute_default_state(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement compute_default_state() when attention costs are positive")
+
+# Optional overrides
+dim_rectangular_state(g::DynamicGame) = dim_state(g)
+transform_state(g::DynamicGame, state) = state
+# Note this Jacobian *should* be square. So if the transformation node -> state
+# changes the number of dimensions, do not include the derivatives wrt linearly
+# dependent states.
+transform_state_jac(g::DynamicGame, state) = I
+transform_state_back(g::DynamicGame, state) = state
+transform_state_back_jac(g::DynamicGame, state) = I
+transform_state_back_hessian(g::DynamicGame, state) = fill(I, dim_rectangular_state(g))
+
+# Helper fuctions
+# Transformation rectangular grid <> simplex
+# Based on https://math.stackexchange.com/a/1945720/404905
+function rectangular_to_simplex(state)
+    state = [state[i] * prod(1 .- state[i+1:end]) for i in eachindex(state)]
+    return vcat(state, [1 - sum(state)])
+end
+function rectangular_to_simplex_jac(state)
+    ret = zeros(length(state), length(state))
+    for i in eachindex(state)
+        ret[i, i:end] .= prod(1 .- state[i+1:end])
+        ret[i, (i+1):end] ./= -1 .* (1 .- state[i+1:end])
+    end
+    return ret
+end
+function simplex_to_rectangular(state)
+    state = state[1:end-1]
+    return [state[i] / (1 - sum_state_others(state, i)) for i in eachindex(state)]
+end
+function simplex_to_rectangular_jac(state)
+    state = state[1:end-1]
+    ret = zeros(length(state), length(state) + 1)
+    for i in eachindex(state)
+        ret[i, i] = 1 / (1 - sum_state_others(state, i))
+        ret[i, i+1:(end-1)] .= state[i] / (1 - sum_state_others(state, i))^2
+    end
+    return ret
+end
+function simplex_to_rectangular_hess(state)
+    state = state[1:end-1]
+    ret = zeros(length(state), length(state) + 1, length(state) + 1)
+    for i in eachindex(state)
+        ret[i, i, i+1:(end-1)] .= 1 / (1 - sum_state_others(state, i))^2
+        ret[i, i+1:(end-1), i] .= 1 / (1 - sum_state_others(state, i))^2
+        ret[i, i+1:(end-1), i+1:(end-1)] .= 2 * state[i] / (1 - sum_state_others(state, i))^3
+    end
+    return ret
+end
+# We need this function because the sum of an empty list is not defined in Julia
+sum_state_others(state, i) = i < length(state) ? sum(state[i+1:end]) : 0.
 
 end

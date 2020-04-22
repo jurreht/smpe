@@ -74,13 +74,13 @@ disable_logging(Logging.Info)
 	Customer Markets." Journal of Industral Economics 61 (4): 938-986.
 	"""
 	struct DeterministicSwitchingModel <: SwitchingModel
-		n_firms
-		marginal_cost
-		switch_cost
-	    new_consumers
-	    df_firms
-	    df_consumers
-		att_cost
+		n_firms::Int
+		marginal_cost::Vector{Float64}
+		switch_cost::Float64
+	    new_consumers::Float64
+	    df_firms::Float64
+	    df_consumers::Float64
+		att_cost::Float64
 	end
 
 	SMPE.num_players(game::SwitchingModel) = game.n_firms

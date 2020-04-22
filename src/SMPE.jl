@@ -642,7 +642,7 @@ function maximize_payoff(
             x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options),
             (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options),
             x0,
-            LBFGS(options.optim_method),
+            options.optim_method,
             options.optim_options
         )
     end

@@ -516,7 +516,7 @@ function simulate_state_variance(
     n_iters = 0
     states = fill(Vector{T}(), length(start_state))
     state = start_state
-    while diff > options.state_sim_eps && n_iters < options.state_sim_min_sims
+    while diff > options.state_sim_eps || n_iters < options.state_sim_min_sims
         actions = map(
             pfs_player -> eval_policy_function(pfs_player, state),
             interp_policy_funcs
@@ -533,6 +533,7 @@ function simulate_state_variance(
         new_var = [var(s) for s in states]
         diff = norm(new_var - prev_var)
         prev_var = new_var
+        n_iters += 1
     end
     return new_var
 end

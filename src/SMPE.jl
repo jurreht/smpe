@@ -9,6 +9,7 @@ using Interpolations
 using JuliennedArrays
 using LinearAlgebra
 using Optim
+using Serialization
 using Statistics
 
 # This allows to comment away "using Logging" above and have working code
@@ -88,12 +89,23 @@ function Interpolations.hessian(itp::TransformedInterpolation, x...)
     )
 end
 
+mutable struct SolutionProgress{S <: AbstractArray{T, N} where {T <: Real, N}}
+    calc_policy_functions::Vector{S}
+    calc_value_functions::S
+    prev_value_functions::S
+    prev_optimal::Vector{Bool}
+    attention::Matrix{Bool}
+    converged::Vector{Bool}
+    last_player::Int
+end
+
 function compute_equilibrium(
     game::DynamicGame,
     nodes::Union{AbstractRange, Vector{<:AbstractRange}};
     x0::Union{Nothing, AbstractVector{<:AbstractVector{<:Number}}, AbstractArray{<:Number, 2}}=nothing,
     options::SMPEOptions=DEFAULT_OPTIONS,
-    return_interpolated=true
+    return_interpolated=true,
+    progress_cache::Union{IO, AbstractString, Nothing}=nothing
 )
     if isa(nodes, AbstractRange)
         nodes = [nodes]
@@ -104,73 +116,101 @@ function compute_equilibrium(
     n_nodes = prod(length(s) for s in nodes)
     ALLNODES = fill(:, dim_rectangular_state(game))
 
-    calc_policy_functions = create_init_actions(game, nodes, x0)
+    init_variables = true
+    # progress = nothing
+    if !isnothing(progress_cache)
+        try
+            progress = deserialize(progress_cache)
+            @info("Restarting from progress cache")
+            init_variables = false
+        catch
+            @info("Failed to load from progress cache, starting from scratch")
+        end
+    end
+    if init_variables  # No progress cache given or progress cache is empty
+        progress = SolutionProgress(
+            create_init_actions(game, nodes, x0),
+            initialize_value_functions(game, nodes),
+            initialize_value_functions(game, nodes),  # It only matters that we get the shape right for now
+            fill(false, num_players(game)),
+            fill(true, (num_players(game), dim_state(game))),
+            fill(false, num_players(game)),
+            0
+        )
+    end
+
     interp_policy_functions = map(
         i -> interpolate_policy_function(
             game,
             nodes,
-            calc_policy_functions[i]
+            progress.calc_policy_functions[i]
         ),
         1:num_players(game)
     )
-    calc_value_functions = initialize_value_functions(game, nodes)
     interp_value_functions = map(
         i -> interpolate_value_function(
             game,
             nodes,
-            calc_value_functions[i, ALLNODES...]
+            progress.calc_value_functions[i, ALLNODES...]
         ),
         1:num_players(game)
     )
-    prev_value_functions =  copy(calc_value_functions)  # It only matters that we get the shape right for now
-    prev_optimal = fill(false, num_players(game))
-    attention = fill(true, (num_players(game), dim_state(game)))
-
-    converged = fill(false, num_players(game))
-    while !all(converged)
+    while !all(progress.converged)
         for player_ind = 1:num_players(game)
+            if player_ind <= progress.last_player
+                # If we restart from failure, start at the player where failure
+                # occurred
+                continue
+            end
+
             # calc_policy_functions and interp_policy_functions get modified in place
-            calc_value_functions[player_ind, ALLNODES...], interp_value_functions[player_ind], attention[player_ind, :] = innerloop_for_player!(
+            progress.calc_value_functions[player_ind, ALLNODES...], interp_value_functions[player_ind], progress.attention[player_ind, :] = innerloop_for_player!(
                 game,
                 nodes,
                 player_ind,
                 interp_value_functions[player_ind],
-                calc_policy_functions,
+                progress.calc_policy_functions,
                 interp_policy_functions,
-                prev_optimal[player_ind],
+                progress.prev_optimal[player_ind],
                 options
             )
 
-            if prev_optimal[player_ind]  # At least one iteration done before => can check convergence
+            if progress.prev_optimal[player_ind]  # At least one iteration done before => can check convergence
                 vf_norm = value_function_norm(
                     game,
-                    calc_value_functions[player_ind, ALLNODES...],
-                    prev_value_functions[player_ind, ALLNODES...]
+                    progress.calc_value_functions[player_ind, ALLNODES...],
+                    progress.prev_value_functions[player_ind, ALLNODES...]
                 )
                 @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
                 if vf_norm < options.eps_outer
-                    converged[player_ind] = true
+                    progress.converged[player_ind] = true
                 else
                     # The actions for one player have changed. As a
                     # result, we can no longer assume that the
                     # actions calculated for other players are optimal.
-                    converged = fill(false, num_players(game))
+                    progress.converged = fill(false, num_players(game))
                 end
             end
 
             # After the first iteration, the values from the previous iteration
             # are probably good starting values for future iterations. Communicate
             # this to innerloop_for_player().
-            prev_optimal[player_ind] = true
+            progress.prev_optimal[player_ind] = true
 
-            prev_value_functions[player_ind, ALLNODES...] = calc_value_functions[player_ind, ALLNODES...]
+            progress.prev_value_functions[player_ind, ALLNODES...] = progress.calc_value_functions[player_ind, ALLNODES...]
+
+            progress.last_player = player_ind < num_players(game) ? player_ind : 0
+
+            if !isnothing(progress_cache)
+                serialize(progress_cache, progress)
+            end
         end
     end
 
     if return_interpolated
-        return interp_policy_functions, interp_value_functions, attention
+        return interp_policy_functions, interp_value_functions, progress.attention
     else
-        return calc_policy_functions, interp_value_functions, attention
+        return progress.calc_policy_functions, interp_value_functions, progress.attention
     end
 end
 

@@ -39,9 +39,14 @@ if !@isdefined(Distributed)
     end
 end
 
-export DynamicGame, SMPEOptions, compute_equilibrium
+export DynamicGame, SMPEOptions, compute_equilibrium, OptimizationConvergenceError
 
 abstract type DynamicGame end
+
+struct OptimizationConvergenceError <: Exception
+    opt_results::Optim.OptimizationResults
+end
+Base.showerror(io::IO, e::OptimizationConvergenceError) = print(io, "optimization did not converge")
 
 @Base.kwdef struct SMPEOptions
     eps_outer::Real = 1e-4
@@ -686,8 +691,8 @@ function maximize_payoff(
             options.optim_options
         )
     end
-    if !Optim.converged(results)
-        throw("Optimiation did not converge")
+    if !Optim.converged(results) || !all([isfinite(x) for x in Optim.minimizer(results)])
+        throw(OptimizationConvergenceError(results))
     end
     return Optim.minimizer(results)
 end

@@ -349,7 +349,7 @@ function innerloop_for_player!(
             # Substitute default state for actual state if agent does not pay attention
             default_node = transform_state_back(game, default_state)
             relevant_nodes = Iterators.product((
-                attention[i] ? states[i] : [default_node[i]]
+                attention[i] ? nodes[i] : [default_node[i]]
                 for i in 1:dim_rectangular_state(game)
             )...)
             calc = let game=game, player_ind=player_ind, prev_optimal=prev_optimal, interp_value_funtion=interp_value_function, options=options, interp_policy_functions=interp_policy_functions

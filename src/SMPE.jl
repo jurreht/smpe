@@ -102,12 +102,13 @@ mutable struct SolutionProgress{S <: AbstractArray{T, N} where {T <: Real, N}}
     attention::Matrix{Bool}
     converged::Vector{Bool}
     last_player::Int
+    compute_time::Float64
 end
 
 function compute_equilibrium(
     game::DynamicGame,
     nodes::Union{AbstractRange, Vector{<:AbstractRange}};
-    x0::Union{Nothing, AbstractVector{<:AbstractVector{<:Number}}, AbstractArray{<:Number, 2}}=nothing,
+    x0=nothing,
     options::SMPEOptions=DEFAULT_OPTIONS,
     return_interpolated=true,
     progress_cache::Union{IO, AbstractString, Nothing}=nothing
@@ -137,10 +138,11 @@ function compute_equilibrium(
             create_init_actions(game, nodes, x0),
             initialize_value_functions(game, nodes),
             initialize_value_functions(game, nodes),  # It only matters that we get the shape right for now
-            fill(false, num_players(game)),
+            fill(isnothing(x0) ? false : true, num_players(game)),
             fill(true, (num_players(game), dim_state(game))),
             fill(false, num_players(game)),
-            0
+            0,
+            0.
         )
     end
 
@@ -160,6 +162,26 @@ function compute_equilibrium(
         ),
         1:num_players(game)
     )
+
+    # Pre-initialize value function if starting x were passed
+    # Only do this if we started from a fresh progress cache, otherwise it
+    # is wasted effort
+    if !isnothing(x0) && progress.compute_time == 0
+        @info "Initial contraction mapping"
+        for i in 1:num_players(game)
+            progress.calc_value_functions[i, ALLNODES...], interp_value_functions[i] = calculate_value_function(
+                game,
+                nodes,
+                Iterators.product(nodes...),
+                fill(true, dim_state(game)),
+                i,
+                interp_value_functions[i],
+                interp_policy_functions,
+                options
+            )
+        end
+    end
+
     while !all(progress.converged)
         for player_ind = 1:num_players(game)
             if player_ind <= progress.last_player
@@ -168,43 +190,45 @@ function compute_equilibrium(
                 continue
             end
 
-            # calc_policy_functions and interp_policy_functions get modified in place
-            progress.calc_value_functions[player_ind, ALLNODES...], interp_value_functions[player_ind], progress.attention[player_ind, :] = innerloop_for_player!(
-                game,
-                nodes,
-                player_ind,
-                interp_value_functions[player_ind],
-                progress.calc_policy_functions,
-                interp_policy_functions,
-                progress.prev_optimal[player_ind],
-                options
-            )
-
-            if progress.prev_optimal[player_ind]  # At least one iteration done before => can check convergence
-                vf_norm = value_function_norm(
+            progress.compute_time += @elapsed begin
+                progress.calc_value_functions[player_ind, ALLNODES...], interp_value_functions[player_ind], progress.attention[player_ind, :] = innerloop_for_player!(
                     game,
-                    progress.calc_value_functions[player_ind, ALLNODES...],
-                    progress.prev_value_functions[player_ind, ALLNODES...]
+                    nodes,
+                    player_ind,
+                    interp_value_functions[player_ind],
+                    progress.calc_policy_functions,
+                    interp_policy_functions,
+                    progress.prev_optimal[player_ind],
+                    options
                 )
-                @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
-                if vf_norm < options.eps_outer
-                    progress.converged[player_ind] = true
-                else
-                    # The actions for one player have changed. As a
-                    # result, we can no longer assume that the
-                    # actions calculated for other players are optimal.
-                    progress.converged = fill(false, num_players(game))
+
+                if progress.prev_optimal[player_ind]  # At least one iteration done before => can check convergence
+                    vf_norm = value_function_norm(
+                        game,
+                        progress.calc_value_functions[player_ind, ALLNODES...],
+                        progress.prev_value_functions[player_ind, ALLNODES...]
+                    )
+                    @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
+                    if vf_norm < options.eps_outer
+                        progress.converged[player_ind] = true
+                    else
+                        # The actions for one player have changed. As a
+                        # result, we can no longer assume that the
+                        # actions calculated for other players are optimal.
+                        progress.converged = fill(false, num_players(game))
+                    end
                 end
+
+                # After the first iteration, the values from the previous iteration
+                # are probably good starting values for future iterations. Communicate
+                # this to innerloop_for_player().
+                progress.prev_optimal[player_ind] = true
+
+                progress.prev_value_functions[player_ind, ALLNODES...] = progress.calc_value_functions[player_ind, ALLNODES...]
+
+                progress.last_player = player_ind < num_players(game) ? player_ind : 0
             end
 
-            # After the first iteration, the values from the previous iteration
-            # are probably good starting values for future iterations. Communicate
-            # this to innerloop_for_player().
-            progress.prev_optimal[player_ind] = true
-
-            progress.prev_value_functions[player_ind, ALLNODES...] = progress.calc_value_functions[player_ind, ALLNODES...]
-
-            progress.last_player = player_ind < num_players(game) ? player_ind : 0
 
             if !isnothing(progress_cache)
                 serialize(progress_cache, progress)
@@ -226,6 +250,7 @@ function create_init_actions(game::DynamicGame, nodes, x0)
             1:num_players(game)
         )
     else
+        return x0
         # TODO: Make this accept x0 in the shape of states
         throw("Not implemented atm")
         if isa(x0, Union{AbstractArray{<:Any, 2}, AbstractArray{<:Any, 3}})

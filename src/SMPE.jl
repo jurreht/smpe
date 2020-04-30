@@ -734,11 +734,16 @@ function calculate_negative_payoff(
 )
     actions_all = insert_actions_at(actions, actions_others, player_ind)
     payoff_now = static_payoff(game, state, player_ind, actions_all)
-    next_state = compute_next_state(game, state, player_ind, actions_all)
-    payoff = payoff_now + (
-        discount_factor(game, player_ind) *
-        value_function_for_state(game, interp_value_function, next_state, options)
-    )
+    delta = discount_factor(game, player_ind)
+    if delta > 0
+        next_state = compute_next_state(game, state, player_ind, actions_all)
+        payoff = payoff_now + (
+            delta *
+            value_function_for_state(game, interp_value_function, next_state, options)
+        )
+    else
+        payoff = payoff_now
+    end
     return -1 * payoff
 end
 
@@ -761,18 +766,23 @@ function calculate_negative_payoff_gradient!(
             insert_actions_at(x, actions_others, player_ind)
         ), actions
     )
-    next_state = compute_next_state(game, state, player_ind, actions_all)
-    vf_grad = value_function_gradient_for_actions(
-        game,
-        state,
-        next_state,
-        player_ind,
-        interp_value_function,
-        actions,
-        actions_others,
-        options
-    )
-    grad = payoff_now_grad + discount_factor(game, player_ind) * vf_grad
+    delta = discount_factor(game, player_ind)
+    if delta > 0
+        next_state = compute_next_state(game, state, player_ind, actions_all)
+        vf_grad = value_function_gradient_for_actions(
+            game,
+            state,
+            next_state,
+            player_ind,
+            interp_value_function,
+            actions,
+            actions_others,
+            options
+        )
+        grad = payoff_now_grad + discount_factor(game, player_ind) * vf_grad
+    else
+        grad = payoff_now_grad
+    end
     out[:] = -1 * grad
 end
 
@@ -890,23 +900,26 @@ perceived_state(game::DynamicGame, state, attention, default_state) = map(
     default_state
 )
 
-calculate_value(
+function calculate_value(
     game::DynamicGame,
     next_state,
     player_ind,
     interp_value_function,
     static_payoff,
     options::SMPEOptions
-) = (
-    static_payoff +
-    discount_factor(game, player_ind) *
-    value_function_for_state(
-        game,
-        interp_value_function,
-        next_state,
-        options
-    )
 )
+    ret = static_payoff
+    delta = discount_factor(game, player_ind)
+    if delta > 0
+        ret += delta * value_function_for_state(
+            game,
+            interp_value_function,
+            next_state,
+            options
+        )
+    end
+    return ret
+end
 
 function value_function_for_state(
     game::DynamicGame,

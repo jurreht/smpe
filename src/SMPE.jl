@@ -820,15 +820,16 @@ function calculate_value_function(
     prev_value_function = nothing
 
     # Cache static payoffs and state transitions
+    pool = CachingPool(workers())
     relevant_states = map(node -> transform_state(game, node), relevant_nodes)
     actions_grid = map(
-        pf -> map(
+        pf -> pmap(
             state -> eval_policy_function(pf, state),
+            pool,
             relevant_states
         ),
         interp_policy_functions
     )
-    pool = CachingPool(workers())
     static_payoff_grid = let game=game, player_ind=player_ind
         pmap(
             zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end]),

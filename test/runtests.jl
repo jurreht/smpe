@@ -41,19 +41,22 @@ disable_logging(Logging.Info)
 		game::CapitalAccumulationProblem,
 		state,
 		player_ind,
+		actions_player,
 		actions
-		) = log(state[1] ^ game.alpha - actions[1][1])
+		) = log(state[1] ^ game.alpha - actions_player[1])
 	SMPE.compute_next_state(
 		game::CapitalAccumulationProblem,
 		state,
 		player_ind,
+		actions_player,
 		actions
-	) = actions[1]
+	) = actions_player
 	SMPE.compute_action_bounds(
 		game::CapitalAccumulationProblem,
 		state,
 		player_ind,
 		interp_value_function,
+		actions_player,
 		actions
 	) = [(game.k_lowest, state[1] ^ game.alpha)]
 	SMPE.compute_optimization_x0(
@@ -61,8 +64,9 @@ disable_logging(Logging.Info)
 		state,
 		player_ind,
 		interp_value_function,
+		actions_player,
 		actions
-		) = isnothing(actions) ? [state[1] ^ game.alpha / 2] : actions[1]
+		) = isnothing(actions_player) ? [state[1] ^ game.alpha / 2] : actions_player
 	SMPE.attention_cost(game::CapitalAccumulationProblem, player_ind) = 0
 
 	abstract type SwitchingModel <: DynamicGame end
@@ -92,11 +96,12 @@ disable_logging(Logging.Info)
 		state,
 		player_ind,
 		interp_value_function,
+		actions_player,
 		actions
 	) = [(0., Inf)]
 	SMPE.compute_optimization_x0(
-	    game::SwitchingModel, state, player_ind, interp_value_function, actions
-	) = isnothing(actions) ? [1.] : actions[player_ind]
+	    game::SwitchingModel, state, player_ind, interp_value_function, actions_player, actions
+	) = isnothing(actions_player) ? [1.] : actions_player
 
 	SMPE.dim_state(game::DeterministicSwitchingModel) = game.n_firms
 	SMPE.dim_rectangular_state(game::DeterministicSwitchingModel) = game.n_firms - 1
@@ -104,9 +109,10 @@ disable_logging(Logging.Info)
 		game::DeterministicSwitchingModel,
 		state,
 		player_ind,
+		actions_player,
 		actions
 	)
-		pi = actions[player_ind][1]
+		pi = actions_player[1]
 		p_other = mean(x[1] for x in actions[1:end .!= player_ind])
 		xi = state[player_ind]
 		ci = game.marginal_cost[player_ind]
@@ -130,17 +136,17 @@ disable_logging(Logging.Info)
 		game::DeterministicSwitchingModel,
 		state,
 		player_ind,
-		actions,
-	)
+		actions_player::AbstractVector{T},
+		actions
+	) where T <: Real
 		# When there is automatic differentiation, actions[player_ind] may be some
 		# kind of DualNumber. Then zeros() need to create an array of the same type
 		# otherwise we will not be able to assign to next_state below.
-		state_type = typeof(actions[player_ind]).parameters[1]
-		next_state = zeros(state_type, game.n_firms)
+		next_state = zeros(T, game.n_firms)
 
 		market_size = game.n_firms * (game.n_firms - 1) / 2
 		for i in 1:game.n_firms
-			pi = actions[i][1]
+			pi = actions_player[1]
 			p_other = mean(x[1] for x in actions[1:game.n_firms .!= i])
 
 			# Marhet share = demand young / market size
@@ -207,9 +213,10 @@ disable_logging(Logging.Info)
 		game::StochasticSwitchingModel,
 		state,
 		player_ind,
+		actions_player,
 		actions
 	)
-		pi = actions[player_ind][1]
+		pi = actions_player[1]
 		p_other = mean(x[1] for x in actions[1:end .!= player_ind])
 		xi = state[player_ind]
 		L = state[game.n_firms + 1]
@@ -236,7 +243,8 @@ disable_logging(Logging.Info)
 		game::StochasticSwitchingModel,
 		state,
 		player_ind,
-		actions,
+		actions_player,
+		actions
 	)
 		next_state = []
 
@@ -245,7 +253,7 @@ disable_logging(Logging.Info)
 		g = (L - L_past) / (1 + L - L_past)
 		market_size = game.n_firms * (game.n_firms - 1) / 2
 		for i in 1:game.n_firms
-			pi = actions[i][1]
+			pi = actions_player[1]
 			p_other = mean(x[1] for x in actions[1:game.n_firms .!= i])
 
 			push!(

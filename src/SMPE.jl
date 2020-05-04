@@ -435,7 +435,8 @@ function calculate_attention(
         game,
         default_state,
         player_ind,
-        insert_actions_at(default_actions, actions_others, player_ind)
+        default_actions,
+        pad_actions(game, actions_others, player_ind)
     )
 
     deriv_actions_state = calculate_derivative_actions_state(
@@ -484,7 +485,8 @@ function calculate_derivative_actions_state(
         game,
         x[1:dim_state(game)],
         player_ind,
-        insert_actions_at(x[dim_state(game)+1:end], actions_others, player_ind)
+        x[dim_state(game)+1:end],
+        pad_actions(game, actions_others, player_ind)
     )
 
     x = vcat(state, actions_state)
@@ -550,7 +552,7 @@ function simulate_state_variance(
         # TODO: Fix RNG?
         state = [
             isa(s, Sampleable) ? rand(s) : s
-            for s in compute_next_state(game, state, player_ind, actions)
+            for s in compute_next_state(game, state, player_ind, actions[player_ind], actions)
         ]
         for i in eachindex(states)
             push!(states[i], state[i])
@@ -582,7 +584,8 @@ function calculate_derivative_actions_state(
         game,
         x[n_actions+1:end],
         player_ind,
-        insert_actions_at(x[1:n_actions], actions_others, player_ind)
+        x[1:n_actions],
+        pad_action(game, actions_others, player_ind)
     )
 
     x = vcat(actions_state, state)
@@ -628,7 +631,7 @@ function calculate_derivative_actions_state(
     stochastic_states_hess = ForwardDiff.jacobian(
         state_stochastic -> begin
             full_state[.!deterministic_states] = state_stochastic
-            next_state = compute_next_state(game, state, player_ind, insert_actions_at(actions_state, actions_others, player_ind))
+            next_state = compute_next_state(game, state, player_ind, actions_state, pad_actions(game, actions_others, player_ind))
             value_function_gradient_for_actions(game, state, next_state, player_ind, interp_value_function, actions_state, actions_others, options)
         end,
         state[.!deterministic_states]
@@ -674,12 +677,12 @@ function calculate_optimal_actions(
     actions_others,
     options::SMPEOptions
 )
-    actions_all = isnothing(actions_state) ? nothing : insert_actions_at(actions_state, actions_others, player_ind)
+    padded_actions = pad_actions(game, actions_others, player_ind)
     # The collect is necessary because of some JuliennedArrays magic in
     # innerloop_for_player!, which can cause a type mismatch in optimization.
     # collect(...) makes sure we have an Array{T, 1} here.
-    x0 = collect(compute_optimization_x0(game, state, player_ind, interp_value_function, actions_all))
-    bounds = compute_action_bounds(game, state, player_ind, interp_value_function, actions_all)
+    x0 = collect(compute_optimization_x0(game, state, player_ind, interp_value_function, actions_state, padded_actions))
+    bounds = compute_action_bounds(game, state, player_ind, interp_value_function, actions_state, padded_actions)
     return maximize_payoff(game, state, player_ind, interp_value_function, actions_others, x0, bounds, options)
 end
 
@@ -732,11 +735,11 @@ function calculate_negative_payoff(
     actions_others,
     options::SMPEOptions
 )
-    actions_all = insert_actions_at(actions, actions_others, player_ind)
-    payoff_now = static_payoff(game, state, player_ind, actions_all)
+    padded_actions = pad_actions(game, actions_others, player_ind)
+    payoff_now = static_payoff(game, state, player_ind, actions, padded_actions)
     delta = discount_factor(game, player_ind)
     if delta > 0
-        next_state = compute_next_state(game, state, player_ind, actions_all)
+        next_state = compute_next_state(game, state, player_ind, actions, padded_actions)
         payoff = payoff_now + (
             delta *
             value_function_for_state(game, interp_value_function, next_state, options)
@@ -757,18 +760,19 @@ function calculate_negative_payoff_gradient!(
     out,
     options::SMPEOptions
 )
-    actions_all = insert_actions_at(actions, actions_others, player_ind)
+    padded_actions_others = pad_actions(game, actions_others, player_ind)
     payoff_now_grad = ForwardDiff.gradient(
         x -> static_payoff(
             game,
             state,
             player_ind,
-            insert_actions_at(x, actions_others, player_ind)
+            x,
+            padded_actions_others
         ), actions
     )
     delta = discount_factor(game, player_ind)
     if delta > 0
-        next_state = compute_next_state(game, state, player_ind, actions_all)
+        next_state = compute_next_state(game, state, player_ind, actions, padded_actions_others)
         vf_grad = value_function_gradient_for_actions(
             game,
             state,
@@ -786,9 +790,14 @@ function calculate_negative_payoff_gradient!(
     out[:] = -1 * grad
 end
 
-insert_actions_at(actions, actions_others, player_ind) = vcat(
-    actions_others[1:player_ind-1], [actions], actions_others[player_ind:end]
-)
+function pad_actions(game::DynamicGame, actions_others::AbstractVector{<:AbstractVector{T}}, player_ind)::Vector{<:AbstractVector{T}} where T
+    return vcat(
+        actions_others[1:player_ind-1],
+        [zeros(T, num_actions(game, player))],
+        actions_others[player_ind:end]
+    )
+end
+pad_actions(game::DynamicGame, actions_others::AbstractVector{<:AbstractArray}, player_ind)::Vector{Vector{Float64}} = [zeros(num_actions(game, player_ind))]
 
 interpolate_value_function(game::DynamicGame, states, calc_value_function) = interpolate_function(game, states, calc_value_function)
 
@@ -832,14 +841,14 @@ function calculate_value_function(
     )
     static_payoff_grid = let game=game, player_ind=player_ind
         pmap(
-            zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end]),
+            zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end][player_ind], zipped[2:end]),
             pool,
             zip(relevant_states, actions_grid...)
         )
     end
     next_state_grid = let game=game, player_ind=player_ind
         pmap(
-            zipped -> compute_next_state(game, zipped[1], player_ind, zipped[2:end]),
+            zipped -> compute_next_state(game, zipped[1], player_ind, zipped[2:end][player_ind], zipped[2:end]),
             pool,
             zip(relevant_states, actions_grid...)
         )
@@ -996,7 +1005,8 @@ function value_function_gradient_for_actions(
             game,
             state,
             player_ind,
-            insert_actions_at(x, actions_others, player_ind)
+            x,
+            pad_actions(game, actions_others, player_ind)
         ),
         actions
     )
@@ -1028,7 +1038,8 @@ function value_function_gradient_for_actions(
             game,
             state,
             player_ind,
-            insert_actions_at(x, actions_others, player_ind)
+            x,
+            pad_actions(game, actions_others, player_ind)
         ),
         actions
     )
@@ -1177,11 +1188,11 @@ function interpolation_bounds(interp::TransformedInterpolation)
 end
 
 compute_optimization_x0(
-    game::DynamicGame, state, player_ind, interp_value_function, actions
-) = isnothing(actions) ? zeros(num_actions(game, player_ind)) : actions[player_ind]
+    game::DynamicGame, state, player_ind, interp_value_function, actions_player, actions
+) = isnothing(actions_player) ? zeros(num_actions(game, player_ind)) : actions_player
 
 compute_action_bounds(
-    game::DynamicGame, state, player_ind, interp_value_function, actions
+    game::DynamicGame, state, player_ind, interp_value_function, actions_player, actions
 ) = fill((nothing, nothing), num_actions(game, player_ind))
 
 # Convergence criterion as in Doraszelski & Pakes (2007)
@@ -1231,8 +1242,8 @@ num_players(g::DynamicGame) = throw("Concrete subtypes of DynamicGame must imple
 dim_state(g::DynamicGame) = throw("Concrete subtypes of DynamicGame must implement dim_state()")
 num_actions(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement num_actions()")
 discount_factor(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement discount_factor()")
-static_payoff(g::DynamicGame, state, player_ind, actions) = throw("Concrete subtypes of DynamicGame must implement static_payoff()")
-compute_next_state(g::DynamicGame, state, player_ind, actions) = throw("Concrete subtypes of DynamicGame must implement compute_next_state()")
+static_payoff(g::DynamicGame, state, player_ind, actions_player, actions_others) = throw("Concrete subtypes of DynamicGame must implement static_payoff()")
+compute_next_state(g::DynamicGame, state, player_ind, actions, actions_others) = throw("Concrete subtypes of DynamicGame must implement compute_next_state()")
 attention_cost(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement attention_cost()")
 compute_default_state(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement compute_default_state() when attention costs are positive")
 

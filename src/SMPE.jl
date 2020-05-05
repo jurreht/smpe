@@ -309,7 +309,6 @@ function innerloop_for_player!(
                 default_state,
                 player_ind,
                 interp_value_function,
-                calc_policy_functions[1:end .!= player_ind],
                 interp_policy_functions,
                 options
             )
@@ -411,11 +410,14 @@ function calculate_attention(
     default_state,
     player_ind,
     interp_value_function,
-    actions_others,
     interp_policy_funcs,
     options::SMPEOptions
 )
     att_cost = attention_cost(game, player_ind)
+    actions_others = map(
+        pf_player -> map(pf -> pf(default_state...), pf_player),
+        interp_policy_funcs[1:end .!= player_ind]
+    )
     default_actions = calculate_optimal_actions(
         game,
         default_state,
@@ -585,7 +587,7 @@ function calculate_derivative_actions_state(
         x[n_actions+1:end],
         player_ind,
         x[1:n_actions],
-        pad_action(game, actions_others, player_ind)
+        pad_actions(game, actions_others, player_ind)
     )
 
     x = vcat(actions_state, state)

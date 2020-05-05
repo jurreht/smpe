@@ -144,10 +144,12 @@ disable_logging(Logging.Info)
 		# otherwise we will not be able to assign to next_state below.
 		next_state = zeros(T, game.n_firms)
 
+		prices = [i == player_ind ? actions_player[1] : x[1] for (i, x) in enumerate(actions)]
+
 		market_size = game.n_firms * (game.n_firms - 1) / 2
 		for i in 1:game.n_firms
-			pi = actions_player[1]
-			p_other = mean(x[1] for x in actions[1:game.n_firms .!= i])
+			pi = prices[i]
+			p_other = mean(prices[1:game.n_firms .!= i])
 
 			# Marhet share = demand young / market size
 			# Demand young is given by eq 12 in Somaini & Einav (2013), noting
@@ -247,14 +249,15 @@ disable_logging(Logging.Info)
 		actions
 	)
 		next_state = []
+		prices = [i == player_ind ? actions_player[1] : x[1] for (i, x) in enumerate(actions)]
 
 		L = state[game.n_firms + 1]
 		L_past = state[game.n_firms + 1]
 		g = (L - L_past) / (1 + L - L_past)
 		market_size = game.n_firms * (game.n_firms - 1) / 2
 		for i in 1:game.n_firms
-			pi = actions_player[1]
-			p_other = mean(x[1] for x in actions[1:game.n_firms .!= i])
+			pi = prices[i]
+			p_other = mean(prices[1:game.n_firms .!= i])
 
 			push!(
 				next_state,

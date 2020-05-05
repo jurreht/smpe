@@ -841,7 +841,7 @@ function calculate_value_function(
     )
     static_payoff_grid = let game=game, player_ind=player_ind
         pmap(
-            zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end][player_ind], zipped[2:end]),
+            zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end][player_ind], collect(zipped[2:end])),
             pool,
             zip(relevant_states, actions_grid...)
         )

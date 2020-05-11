@@ -76,14 +76,16 @@ struct TransformedInterpolation{S<:AbstractInterpolation{N, T, NT} where {N, T, 
     game::G
 end
 
-(itp::TransformedInterpolation)(x...) = itp.interpolation(transform_state_back(itp.game, collect(x))...)
+norm_vec(x::Tuple) = collect(Iterators.flatten(x))
+norm_vec(x::AbstractArray) = x
+(itp::TransformedInterpolation)(x...) = itp.interpolation(transform_state_back(itp.game, norm_vec(x))...)
 Base.ndims(itp::TransformedInterpolation) = ndims(itp.interpolation)
 Interpolations.gradient(itp::TransformedInterpolation, x...) = (
     transpose(transform_state_back_jac(itp.game, x)) *
-    Interpolations.gradient(itp.interpolation, transform_state_back(itp.game, collect(x))...)
+    Interpolations.gradient(itp.interpolation, transform_state_back(itp.game, norm_vec(x))...)
 )
 function Interpolations.hessian(itp::TransformedInterpolation, x...)
-    x = collect(x)
+    x = norm_vec(x)
     x_trans_back = transform_state_back(itp.game, x)
     grad_v = Interpolations.gradient(itp.interpolation, x_trans_back...)
     hess_v = Interpolations.hessian(itp.interpolation, x_trans_back...)

@@ -835,7 +835,7 @@ function calculate_value_function(
 
     # Cache static payoffs and state transitions
     pool = CachingPool(workers())
-    relevant_states = map(node -> transform_state(game, node), relevant_nodes)
+    relevant_states = map(node -> transform_state(game, collect(node)), relevant_nodes)
     actions_grid = map(
         pf -> pmap(
             state -> eval_policy_function(pf, state),

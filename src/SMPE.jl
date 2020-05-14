@@ -183,6 +183,10 @@ function compute_equilibrium(
                 options
             )
         end
+
+        if !isnothing(progress_cache)
+            serialize(progress_cache, progress)
+        end
     end
 
     while !all(progress.converged)

@@ -172,16 +172,18 @@ function compute_equilibrium(
     if !isnothing(x0) && progress.compute_time == 0
         @info "Initial contraction mapping"
         for i in 1:num_players(game)
-            progress.calc_value_functions[i, ALLNODES...], interp_value_functions[i] = calculate_value_function(
-                game,
-                nodes,
-                Iterators.product(nodes...),
-                fill(true, dim_state(game)),
-                i,
-                interp_value_functions[i],
-                interp_policy_functions,
-                options
-            )
+            progress.compute_time += @elapsed begin
+                progress.calc_value_functions[i, ALLNODES...], interp_value_functions[i] = calculate_value_function(
+                    game,
+                    nodes,
+                    Iterators.product(nodes...),
+                    fill(true, dim_state(game)),
+                    i,
+                    interp_value_functions[i],
+                    interp_policy_functions,
+                    options
+                )
+            end
         end
 
         if !isnothing(progress_cache)

@@ -1,7 +1,6 @@
 module SMPE
 
 using Cuba
-using Distributed
 using Distributions
 using ForwardDiff
 using Logging
@@ -26,19 +25,6 @@ if !@isdefined(Logging)
     end
 end
 
-# This allows us to comment out "using Distributed" during development
-# to get serial execution no matter what.
-if !@isdefined(Distributed)
-    pmap(::AbstractWorkerPool, args) = map(args...)
-    pmap(args...) = map(args...)
-    macro sync(ex)
-        return :( $(esc(ex)) )
-    end
-    macro distributed(ex)
-        return :( $(esc(ex)) )
-    end
-end
-
 export DynamicGame, SMPEOptions, compute_equilibrium, OptimizationConvergenceError
 
 abstract type DynamicGame end
@@ -56,7 +42,6 @@ Base.showerror(io::IO, e::OptimizationConvergenceError) = print(io, "optimizatio
     optim_options::Optim.Options = Optim.Options()
     state_sim_eps::Real = 1e-2
     state_sim_min_sims::Integer = 100
-    contraction_batch_size::Integer = 10000
     integration_rel_tol::Real = 1e-1
     integration_abs_tol::Real = 1e-3
 end
@@ -149,22 +134,20 @@ function compute_equilibrium(
         )
     end
 
-    interp_policy_functions = map(
-        i -> interpolate_policy_function(
+    interp_policy_functions = Vector{Vector{TransformedInterpolation}}(undef, num_players(game))
+    interp_value_functions = Vector{TransformedInterpolation}(undef, num_players(game))
+    Threads.@threads for player_ind in 1:num_players(game)
+        interp_policy_functions[player_ind] = interpolate_policy_function(
             game,
             nodes,
-            progress.calc_policy_functions[i]
-        ),
-        1:num_players(game)
-    )
-    interp_value_functions = map(
-        i -> interpolate_value_function(
+            progress.calc_policy_functions[player_ind]
+        )
+        interp_value_functions[player_ind] = interpolate_value_function(
             game,
             nodes,
-            progress.calc_value_functions[i, ALLNODES...]
-        ),
-        1:num_players(game)
-    )
+            progress.calc_value_functions[player_ind, ALLNODES...]
+        )
+    end
 
     # Pre-initialize value function if starting x were passed
     # Only do this if we started from a fresh progress cache, otherwise it
@@ -328,29 +311,26 @@ function innerloop_for_player!(
         @debug "Attention vector = $(attention)"
 
         @info "Calculating policy function..."
-        pool = CachingPool(workers())
         if all(attention)
             # The agent pays attention to the full state. This means that we
             # do not interpolation to predict the other agents' actions as the
             # relevant states will be precisely the elements in states.
             relevant_nodes = Iterators.product(nodes...)
-            # Closed over voriables are only transmitted to workers once
-            calc = let game = game, relevant_nodes = relevant_nodes, options=options, player_ind = player_ind, prev_optimal = prev_optimal, interp_value_function = interp_value_function, calc_policy_functions = calc_policy_functions
-                pmap(
-                    node_ind -> calculate_optimal_actions(
-                        game,
-                        transform_state(game, collect(relevant_nodes[node_ind])),
-                        player_ind,
-                        interp_value_function,
-                        prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
-                        [Slices(pf, dim_rectangular_state(game) + 1)[node_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
-                        options
-                    ),
-                    pool,
-                    # relevant_nodes supports fast linear indexing, while calc_policy_functions
-                    # does not. Hence we get the indices from calc_policy_functions
-                    # to get a CartesianIndex
-                    eachindex(Slices(calc_policy_functions[1], dim_rectangular_state(game) + 1))
+            # relevant_nodes supports fast linear indexing, while calc_policy_functions
+            # does not. Hence we get the indices from calc_policy_functions
+            # to get a CartesianIndex
+            inds = eachindex(Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1))
+            Threads.@threads for node_ind in inds
+                calc_policy_functions[player_ind][node_ind, :] = calculate_optimal_actions(
+                    game,
+                    transform_state(game, collect(relevant_nodes[node_ind])),
+                    player_ind,
+                    interp_value_function,
+                    # prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
+                    prev_optimal ? calc_policy_functions[player_ind][node_ind, :] : nothing,
+                    [pf[node_ind, :] for pf in calc_policy_functions[1:end .!= player_ind]],
+                    #[Slices(pf, dim_rectangular_state(game) + 1)[node_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
+                    options
                 )
             end
         else
@@ -360,27 +340,26 @@ function innerloop_for_player!(
                 attention[i] ? nodes[i] : [default_node[i]]
                 for i in 1:dim_rectangular_state(game)
             )...)
-            calc = let game=game, player_ind=player_ind, prev_optimal=prev_optimal, interp_value_funtion=interp_value_function, options=options, interp_policy_functions=interp_policy_functions
-                pmap(
-                    state -> calculate_optimal_actions(
-                        game,
-                        state,
-                        player_ind,
-                        interp_value_function,
-                        prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
-                        [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
-                        options
-                    ),
-                    pool,
-                    map(node -> collect(transform_state(game, node)), relevant_nodes),
+            calc = Array{Float64}(undef, size(relevant_nodes)..., num_actions(game, player_ind))
+            Threads.@threads for node_ind in eachindex(relevant_nodes)
+                state = transform_state(game, relevant_nodes[node_ind])
+                calc[node_ind, :] = calculate_optimal_actions(
+                    game,
+                    state,
+                    player_ind,
+                    interp_value_function,
+                    prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
+                    [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
+                    options
                 )
             end
             # Repeat optimal policies across states that the agent does not pay attention to
-            calc = repeat(calc; outer=[attention[i] ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)])
+            nreps = vcat(
+                [attention[i] ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)], # state
+                [1] # actions
+            )
+            calc_policy_functions[player_ind] = repeat(calc; outer=nreps)
         end
-        # We now have an Array{Array{..., 1}, n_dims}, but need a single
-        # Array{..., n_actions + 1}. JuliennedArrays.Align() achieves this.
-        calc_policy_functions[player_ind] = Align(calc, fill(False(), dim_rectangular_state(game))..., True())
         interp_policy_functions[player_ind] = interpolate_policy_function(
             game, nodes, calc_policy_functions[player_ind]
         )
@@ -840,65 +819,63 @@ function calculate_value_function(
     prev_value_function = nothing
 
     # Cache static payoffs and state transitions
-    pool = CachingPool(workers())
     relevant_states = map(node -> transform_state(game, collect(node)), relevant_nodes)
-    actions_grid = map(
-        pf -> pmap(
-            state -> eval_policy_function(pf, state),
-            pool,
-            relevant_states
-        ),
-        interp_policy_functions
-    )
-    static_payoff_grid = let game=game, player_ind=player_ind
-        pmap(
-            zipped -> static_payoff(game, zipped[1], player_ind, zipped[2:end][player_ind], collect(zipped[2:end])),
-            pool,
-            zip(relevant_states, actions_grid...)
+    size_states = size(relevant_states)
+    state_inds = Iterators.product([1:s for s in size_states]...)
+    actions_grid = Vector{Array{Float64, dim_rectangular_state(game) + 1}}()
+    for player_ind in 1:num_players(game)
+        pf = interp_policy_functions[player_ind]
+        grid_player = Array{Float64}(undef, size_states..., num_actions(game, player_ind))
+        Threads.@threads for state_ind in state_inds
+            grid_player[state_ind..., :] = eval_policy_function(pf, relevant_states[state_ind...])
+        end
+        push!(actions_grid, grid_player)
+    end
+    static_payoff_grid = Array{Float64}(undef, size_states...)
+    first_state = iterate(state_inds)[1]
+    # It is important we get this right, because it will be used for multiple
+    # dispatch when calculating the value function
+    next_state_type = typeof(
+        compute_next_state(
+            game,
+            relevant_states[first_state...],
+            player_ind,
+            actions_grid[player_ind][first_state..., :],
+            [actions_grid[i][first_state..., :] for i in 1:num_players(game)]
+        )
+    ).parameters[1]
+    next_state_grid = Array{next_state_type}(undef, size_states..., dim_state(game))
+    Threads.@threads for state_ind in state_inds
+        state = relevant_states[state_ind...]
+        actions = [actions_grid[i][state_ind..., :] for i in 1:num_players(game)]
+        static_payoff_grid[state_ind...] = static_payoff(
+            game, state, player_ind, actions[player_ind], actions
+        )
+        next_state_grid[state_ind..., :] = compute_next_state(
+            game, state, player_ind, actions[player_ind], actions
         )
     end
-    next_state_grid = let game=game, player_ind=player_ind
-        pmap(
-            zipped -> compute_next_state(game, zipped[1], player_ind, zipped[2:end][player_ind], collect(zipped[2:end])),
-            pool,
-            zip(relevant_states, actions_grid...)
-        )
-    end
-    # # Allow the GC to take care of this
+    # Allow the GC to take care of this
     relevant_states = nothing
     actions_grid = nothing
 
-    repeat_calc_vf = [
-        indim == 1 ? outdim : 1
-        for (indim, outdim)
-        in zip(size(relevant_nodes), (length(s) for s in nodes))
-    ]
-
     while true
-        calc_value_function = let game=game, player_ind=player_ind, options=options, interp_value_function=interp_value_function
-            pmap(
-                zipped -> map(
-                    z -> calculate_value(
-                        game,
-                        z[2],
-                        player_ind,
-                        interp_value_function,
-                        z[1],
-                        options
-                    ),
-                    zipped
-                ),
-                pool,
-                Iterators.partition(
-                    zip(static_payoff_grid, next_state_grid),
-                    options.contraction_batch_size
-                )
+        calc_value_function = Array{Float64}(undef, size_states...)
+        Threads.@threads for state_ind in state_inds
+            calc_value_function[state_ind...] = calculate_value(
+                game,
+                next_state_grid[state_ind..., :],
+                player_ind,
+                interp_value_function,
+                static_payoff_grid[state_ind...],
+                options
             )
         end
-        calc_value_function = reshape(
-            vcat(calc_value_function...),
-            size(relevant_nodes)
-        )
+        repeat_calc_vf = [
+            indim == 1 ? outdim : 1
+            for (indim, outdim)
+            in zip(size(relevant_nodes), (length(s) for s in nodes))
+        ]
         calc_value_function = repeat(calc_value_function, repeat_calc_vf...)
 
         if !isnothing(prev_value_function)
@@ -1212,7 +1189,8 @@ value_function_norm(game::DynamicGame, new_value, old_value) = max(
 )
 
 # getindex() is not implemented for either Enumerate or ProductIterator.
-# But @distributed() needs it to loop over the states. So we have it...
+# But @threads() needs it to loop over the states. So we have it...
+Base.firstindex(it::Base.Iterators.ProductIterator{<:Any}) = 1
 function Base.getindex(
     it::Base.Iterators.ProductIterator{<:Any},
     ind::Integer

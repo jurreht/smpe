@@ -161,7 +161,7 @@ function compute_equilibrium(
                     nodes,
                     Iterators.product(nodes...),
                     fill(1.0, dim_state(game)),
-                    zeros(0., dim_state(game)),  # Irrelvant given attention = 1
+                    zeros(dim_state(game)),  # Irrelvant given attention = 1
                     i,
                     interp_value_functions[i],
                     interp_policy_functions,

@@ -286,7 +286,7 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)
 		policy_exact = alpha * beta * collect(grid) .^ alpha
 		@test pf[1] ≈ policy_exact atol=1e-2 rtol=5e-1
-		@test all(att)
+		@test all(att .== 1)
 	end
 
 	# Correct equilibria for SwitchingModel. Computed from the source code as
@@ -332,7 +332,7 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		)
 
 		@test pf ≈ policy_check atol=1e-2 rtol=1e-2
-		@test all(att)
+		@test all(att .== 1)
 	end
 
 	@testset "Somaini and Einav (2013) with attention costs" for (eq, mc1) in Iterators.product(switching_eqs, [0, .5])
@@ -349,7 +349,7 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		policy_check = somaini_einav_static_eq(game, grid)
 
 		@test pf ≈ policy_check atol=1e-2 rtol=1e-2
-		@test !any(att)
+		@test all(att .== 0.)
 	end
 
 	@testset "Somain and Einav (2013) with stochastic market size" for (eq, mc1) in Iterators.product(
@@ -370,6 +370,6 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		policy_check = somaini_einav_static_eq(game, grid)
 
 		@test pf ≈ policy_check atol=1e-2 rtol=1e-2
-		@test !any(att)
+		@test all(att .== 0)
 	end
 end

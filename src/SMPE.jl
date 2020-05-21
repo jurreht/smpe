@@ -87,7 +87,7 @@ mutable struct SolutionProgress{S <: AbstractArray{T, N} where {T <: Real, N}}
     calc_value_functions::S
     prev_value_functions::S
     prev_optimal::Vector{Bool}
-    attention::Matrix{Bool}
+    attention::Matrix{Float64}
     converged::Vector{Bool}
     last_player::Int
     compute_time::Float64
@@ -127,7 +127,7 @@ function compute_equilibrium(
             initialize_value_functions(game, nodes),
             initialize_value_functions(game, nodes),  # It only matters that we get the shape right for now
             fill(isnothing(x0) ? false : true, num_players(game)),
-            fill(true, (num_players(game), dim_state(game))),
+            fill(1.0, (num_players(game), dim_state(game))),
             fill(false, num_players(game)),
             0,
             0.
@@ -160,7 +160,8 @@ function compute_equilibrium(
                     game,
                     nodes,
                     Iterators.product(nodes...),
-                    fill(true, dim_state(game)),
+                    fill(1.0, dim_state(game)),
+                    zeros(0., dim_state(game)),  # Irrelvant given attention = 1
                     i,
                     interp_value_functions[i],
                     interp_policy_functions,
@@ -305,14 +306,14 @@ function innerloop_for_player!(
                 options
             )
         else
-            default_state = fill(NaN, dim_state(game))
-            attention = fill(true, dim_state(game))
+            default_state = fill(0.0, dim_state(game))
+            attention = fill(1.0, dim_state(game))
         end
         @debug "Attention vector = $(attention)"
 
         @info "Calculating policy function..."
-        if all(attention)
-            # The agent pays attention to the full state. This means that we
+        if all(attention .> 0)
+            # The agent pays (at least partial) attention to the full state. This means that we
             # do not interpolation to predict the other agents' actions as the
             # relevant states will be precisely the elements in states.
             relevant_nodes = Iterators.product(nodes...)
@@ -323,7 +324,12 @@ function innerloop_for_player!(
             Threads.@threads for node_ind in inds
                 calc_policy_functions[player_ind][node_ind, :] = calculate_optimal_actions(
                     game,
-                    transform_state(game, collect(relevant_nodes[node_ind])),
+                    perceived_state(
+                        game,
+                        transform_state(game, collect(relevant_nodes[node_ind])),
+                        attention,
+                        default_state
+                    ),
                     player_ind,
                     interp_value_function,
                     # prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
@@ -337,7 +343,7 @@ function innerloop_for_player!(
             # Substitute default state for actual state if agent does not pay attention
             default_node = transform_state_back(game, default_state)
             relevant_nodes = Iterators.product((
-                attention[i] ? nodes[i] : [default_node[i]]
+                attention[i] > 0 ? nodes[i] : [default_node[i]]
                 for i in 1:dim_rectangular_state(game)
             )...)
             calc = Array{Float64}(undef, size(relevant_nodes)..., num_actions(game, player_ind))
@@ -345,7 +351,12 @@ function innerloop_for_player!(
                 state = transform_state(game, relevant_nodes[node_ind])
                 calc[node_ind, :] = calculate_optimal_actions(
                     game,
-                    state,
+                    perceived_state(
+                        game,
+                        state,
+                        attention,
+                        default_state
+                    ),
                     player_ind,
                     interp_value_function,
                     prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
@@ -355,7 +366,7 @@ function innerloop_for_player!(
             end
             # Repeat optimal policies across states that the agent does not pay attention to
             nreps = vcat(
-                [attention[i] ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)], # state
+                [attention[i] > 0 ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)], # state
                 [1] # actions
             )
             calc_policy_functions[player_ind] = repeat(calc; outer=nreps)
@@ -370,6 +381,7 @@ function innerloop_for_player!(
             nodes,
             relevant_nodes,
             attention,
+            default_state,
             player_ind,
             interp_value_function,
             interp_policy_functions,
@@ -401,7 +413,6 @@ function calculate_attention(
     interp_policy_funcs,
     options::SMPEOptions
 )
-    att_cost = attention_cost(game, player_ind)
     actions_others = map(
         pf_player -> map(pf -> pf(default_state...), pf_player),
         interp_policy_funcs[1:end .!= player_ind]
@@ -448,13 +459,14 @@ function calculate_attention(
         interp_policy_funcs,
         options
     )
-    benefit_attention = -.5 * state_var .* diag(
+    benefit_attention = -1 * state_var .* diag(
         transpose(deriv_actions_state) *
         hess_value_actions *
         deriv_actions_state
     )
     @debug "Benefit attention = $(benefit_attention)"
-    return benefit_attention .>= attention_cost(game, player_ind)
+    att_cost = attention_cost(game, player_ind)
+    return [attention_function(game, ba / att_cost) for ba in benefit_attention]
 end
 
 function calculate_derivative_actions_state(
@@ -810,6 +822,7 @@ function calculate_value_function(
     nodes,
     relevant_nodes,
     attention,
+    default_state,
     player_ind,
     interp_value_function,
     interp_policy_functions,
@@ -820,14 +833,23 @@ function calculate_value_function(
 
     # Cache static payoffs and state transitions
     relevant_states = map(node -> transform_state(game, collect(node)), relevant_nodes)
+    perceived_states = map(state -> perceived_state(game, state, attention, default_state), relevant_states)
     size_states = size(relevant_states)
     state_inds = Iterators.product([1:s for s in size_states]...)
     actions_grid = Vector{Array{Float64, dim_rectangular_state(game) + 1}}()
-    for player_ind in 1:num_players(game)
-        pf = interp_policy_functions[player_ind]
-        grid_player = Array{Float64}(undef, size_states..., num_actions(game, player_ind))
+    for i in 1:num_players(game)
+        pf = interp_policy_functions[i]
+        grid_player = Array{Float64}(undef, size_states..., num_actions(game, i))
         Threads.@threads for state_ind in state_inds
-            grid_player[state_ind..., :] = eval_policy_function(pf, relevant_states[state_ind...])
+            # For the current player, we evaluate the policy function in the true
+            # state, but for the other players in the current player's perceived
+            # state. This is because the way the policy functions are
+            # interpolated. The actual policy function of player_ind in a certain
+            # state is calculated taking into account inattention. For the other
+            # players, however the current player expects pf_j(perceived_i(state)),
+            # where pf_j is j's objective policy function.
+            state = i == player_ind ? relevant_states[state_ind...] : perceived_states[state_ind...]
+            grid_player[state_ind..., :] = eval_policy_function(pf, state)
         end
         push!(actions_grid, grid_player)
     end
@@ -846,7 +868,14 @@ function calculate_value_function(
     ).parameters[1]
     next_state_grid = Array{next_state_type}(undef, size_states..., dim_state(game))
     Threads.@threads for state_ind in state_inds
-        state = relevant_states[state_ind...]
+        # Here, we do need the perdeived state since this what the agent perceives
+        # happens.
+        state = perceived_state(
+            game,
+            relevant_states[state_ind...],
+            attention,
+            default_state
+        )
         actions = [actions_grid[i][state_ind..., :] for i in 1:num_players(game)]
         static_payoff_grid[state_ind...] = static_payoff(
             game, state, player_ind, actions[player_ind], actions
@@ -891,12 +920,12 @@ function calculate_value_function(
     return calc_value_function, interp_value_function
 end
 
-perceived_state(game::DynamicGame, state, attention, default_state) = map(
-    (s, att, ds) -> att ? s : ds,
-    state,
-    attention,
-    default_state
-)
+perceived_state(
+    game::DynamicGame,
+    state::Vector{Float64},
+    attention::Vector{Float64},
+    default_state::Vector{Float64}
+)::Vector{Float64} = attention .* state .+ (1 .- attention) .* default_state
 
 function calculate_value(
     game::DynamicGame,
@@ -1237,6 +1266,7 @@ attention_cost(g::DynamicGame, player_ind) = throw("Concrete subtypes of Dynamic
 compute_default_state(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement compute_default_state() when attention costs are positive")
 
 # Optional overrides
+attention_function(g::DynamicGame, sigma2) = sigma2 >= 2 ? 1.0 : 0.0
 dim_rectangular_state(g::DynamicGame) = dim_state(g)
 transform_state(g::DynamicGame, state) = state
 # Note this Jacobian *should* be square. So if the transformation node -> state

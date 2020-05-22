@@ -347,7 +347,8 @@ function innerloop_for_player!(
                 for i in 1:dim_rectangular_state(game)
             )...)
             calc = Array{Float64}(undef, size(relevant_nodes)..., num_actions(game, player_ind))
-            Threads.@threads for node_ind in eachindex(relevant_nodes)
+            inds = eachindex(Slices(calc, dim_rectangular_state(game) + 1))
+            Threads.@threads for node_ind in inds
                 state = transform_state(game, relevant_nodes[node_ind])
                 calc[node_ind, :] = calculate_optimal_actions(
                     game,

@@ -312,7 +312,7 @@ function innerloop_for_player!(
         @debug "Attention vector = $(attention)"
 
         @info "Calculating policy function..."
-        if all(attention .> 0)
+        if all(attention .== 1)
             # The agent pays (at least partial) attention to the full state. This means that we
             # do not interpolation to predict the other agents' actions as the
             # relevant states will be precisely the elements in states.

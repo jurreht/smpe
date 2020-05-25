@@ -20,20 +20,21 @@ and related methods, to transform from a rectangular to non-rectangular grid.
 The domain of the wrapper type is the transformeed (non-rectangular) state and
 it takes care of the chain rule when calculating the graient or hessian.
 """
-struct TransformedInterpolation{S<:AbstractInterpolation{N, T, NT} where {N, T, NT}, G<:DynamicGame}
+struct TransformedInterpolation{N, T, NT, S <: AbstractInterpolation{N, T, NT}, G <: DynamicGame} <: AbstractInterpolation{N, T, NT}
     interpolation::S
     game::G
 end
 
+const InterpArg = Vararg{Interpolations.UnexpandedIndexTypes}
 norm_vec(x::Tuple) = collect(Iterators.flatten(x))
 norm_vec(x::AbstractArray) = x
-(itp::TransformedInterpolation)(x...) = itp.interpolation(transform_state_back(itp.game, norm_vec(x))...)
+(itp::TransformedInterpolation)(x::InterpArg) = itp.interpolation(transform_state_back(itp.game, norm_vec(x))...)
 Base.ndims(itp::TransformedInterpolation) = ndims(itp.interpolation)
-Interpolations.gradient(itp::TransformedInterpolation, x...) = (
+Interpolations.gradient(itp::TransformedInterpolation, x::InterpArg) = (
     transpose(transform_state_back_jac(itp.game, x)) *
     Interpolations.gradient(itp.interpolation, transform_state_back(itp.game, norm_vec(x))...)
 )
-function Interpolations.hessian(itp::TransformedInterpolation, x...)
+function Interpolations.hessian(itp::TransformedInterpolation, x::InterpArg)
     x = norm_vec(x)
     x_trans_back = transform_state_back(itp.game, x)
     grad_v = Interpolations.gradient(itp.interpolation, x_trans_back...)
@@ -46,9 +47,9 @@ function Interpolations.hessian(itp::TransformedInterpolation, x...)
     )
 end
 
-struct Equilibrium{S <: AbstractArray{T, N} where {T <: Real, N}, T <: TransformedInterpolation}
-    pf::Vector{Vector{T}}
-    vf::Vector{T}
+struct Equilibrium{S <: AbstractArray{N, T} where {N, T}, U <: AbstractInterpolation{N, T, NT} where {N, T, NT}}
+    pf::Vector{Vector{U}}
+    vf::Vector{U}
     attention::Matrix{Float64}
     pf_at_nodes::Vector{S}
     vf_at_nodes::S
@@ -95,7 +96,7 @@ eval_policy_function(policy_function, state) = map(
 
 function value_function_for_state(
     game::DynamicGame,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     state::AbstractVector{<:Real},
     options::SMPEOptions
 )::T where {T<:Real, N, NT}
@@ -104,7 +105,7 @@ end
 
 function value_function_for_state(
     game::DynamicGame,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     state::AbstractVector{<:Union{<:Real, ContinuousUnivariateDistribution}},
     options::SMPEOptions
 )::T where {T<:Real, N, NT}
@@ -125,7 +126,7 @@ end
 
 function value_function_gradient_for_state(
     game::DynamicGame,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     state::AbstractVector{<:Real},
     options::SMPEOptions
 )::Vector{T} where {T<:Real, N, NT}
@@ -134,7 +135,7 @@ end
 
 function value_function_gradient_for_state(
     game::DynamicGame,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     state::AbstractVector{<:Union{Real, ContinuousUnivariateDistribution}},
     options::SMPEOptions
 )::Vector{T} where {T<:Real, N, NT}
@@ -157,11 +158,11 @@ function value_function_gradient_for_actions(
     state::AbstractVector{T},
     next_state::AbstractVector{<:Real},
     player_ind,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     actions,
     actions_others,
     options::SMPEOptions
-)::Vector{T} where {T<:Real, N, NT}
+)::Vector{T} where {T <: Real, N, NT}
     next_state_jac = ForwardDiff.jacobian(
         x -> compute_next_state(
             game,
@@ -182,11 +183,11 @@ function value_function_gradient_for_actions(
     state::AbstractVector{T},
     next_state::AbstractVector{<:Union{<:Real, ContinuousUnivariateDistribution}},
     player_ind,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     actions,
     actions_others,
     options::SMPEOptions
-)::Vector{T} where {T<:Real, N, NT}
+)::Vector{T} where {T <: Real, N, NT}
     next_node = transform_state_back(game, next_state)
     # Only differentiate wrt the non-stochastic parts of the state/node
     # (i.e. it is assumed that the stochastic state transitions are exogenous)
@@ -302,7 +303,7 @@ end
 
 function value_function_hessian_for_state(
     game::DynamicGame,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     states::AbstractVector{T},
     options::SMPEOptions
 )::Matrix{T} where {T<:Real, N, NT}
@@ -315,7 +316,7 @@ end
 
 function value_function_hessian_for_state(
     game::DynamicGame,
-    interp_value_function::TransformedInterpolation{<:AbstractInterpolation{T, N, NT}, <:DynamicGame},
+    interp_value_function::AbstractInterpolation{T, N, NT},
     state::AbstractVector{<:Union{Real, ContinuousUnivariateDistribution}},
     options::SMPEOptions
 )::Matrix{T} where {T<:Real, N, NT}
@@ -336,7 +337,7 @@ function value_function_hessian_for_state(
     return reshape(hess_vectorized, n_deterministic, n_deterministic)
 end
 
-function interpolation_bounds(interp::TransformedInterpolation)
+function interpolation_bounds(interp::AbstractInterpolation)
     itp = interp.interpolation
     # Extrapolated functions have no bounds, give the bounds of the
     # underlying interpolated function

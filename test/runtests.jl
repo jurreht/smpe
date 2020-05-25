@@ -283,10 +283,10 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		beta = 0.95
 		game = CapitalAccumulationProblem(alpha, beta)
 		grid = range(game.k_lowest, 4*game.k_steady_state, length=100)
-		pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)
+		eq = compute_equilibrium(game, grid)
 		policy_exact = alpha * beta * collect(grid) .^ alpha
-		@test pf[1] ≈ policy_exact atol=1e-2 rtol=5e-1
-		@test all(att .== 1)
+		@test eq.pf_at_nodes[1] ≈ policy_exact atol=1e-2 rtol=5e-1
+		@test all(eq.attention .== 1)
 	end
 
 	# Correct equilibria for SwitchingModel. Computed from the source code as
@@ -319,8 +319,7 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 
 		game = DeterministicSwitchingModel(eq.N, mc, eq.s, eq.g, eq.df, 0, 0)
 		grid = fill(range(0.01, .99, length=10), eq.N - 1)
-		pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)
-		# pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)
+		out = compute_equilibrium(game, grid)
 
 		# Somaini and Einav (2013, Theorem 1)
 		policy_check = map(
@@ -331,8 +330,8 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 			1:eq.N
 		)
 
-		@test pf ≈ policy_check atol=1e-2 rtol=1e-2
-		@test all(att .== 1)
+		@test out.pf_at_nodes ≈ policy_check atol=1e-2 rtol=1e-2
+		@test all(out.attention .== 1)
 	end
 
 	@testset "Somaini and Einav (2013) with attention costs" for (eq, mc1) in Iterators.product(switching_eqs, [0, .5])
@@ -341,15 +340,15 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 
 		game = DeterministicSwitchingModel(eq.N, mc, eq.s, eq.g, eq.df, 0, .1)
 		grid = fill(range(0, 1, length=10), eq.N - 1)
-		pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)
+		out = compute_equilibrium(game, grid)
 
 		# The SMPE is just no attention to anything and repeated play
 	    # of the static Nash equilibrium for the steady state market
 	    # shares.
 		policy_check = somaini_einav_static_eq(game, grid)
 
-		@test pf ≈ policy_check atol=1e-2 rtol=1e-2
-		@test all(att .== 0.)
+		@test out.pf_at_nodes ≈ policy_check atol=1e-2 rtol=1e-2
+		@test all(out.attention .== 0.)
 	end
 
 	@testset "Somain and Einav (2013) with stochastic market size" for (eq, mc1) in Iterators.product(
@@ -364,12 +363,12 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 			fill(range(.1, 2, length=10), 2)
 		)
 
-		pf, vf, att = compute_equilibrium(game, grid; return_interpolated=false)
+		out = compute_equilibrium(game, grid)
 
 		# Without switching costs, equilibrium is repetition of static equilibrium
 		policy_check = somaini_einav_static_eq(game, grid)
 
-		@test pf ≈ policy_check atol=1e-2 rtol=1e-2
-		@test all(att .== 0)
+		@test out.pf_at_nodes ≈ policy_check atol=1e-2 rtol=1e-2
+		@test all(out.attention .== 0)
 	end
 end

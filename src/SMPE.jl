@@ -93,12 +93,20 @@ mutable struct SolutionProgress{S <: AbstractArray{T, N} where {T <: Real, N}}
     compute_time::Float64
 end
 
+struct Equilibrium{S <: AbstractArray{T, N} where {T <: Real, N}, T <: TransformedInterpolation}
+    pf::Vector{Vector{T}}
+    vf::Vector{T}
+    attention::Matrix{Float64}
+    pf_at_nodes::Vector{S}
+    vf_at_nodes::S
+    compute_time::Float64
+end
+
 function compute_equilibrium(
     game::DynamicGame,
     nodes::Union{AbstractRange, Vector{<:AbstractRange}};
     x0=nothing,
     options::SMPEOptions=DEFAULT_OPTIONS,
-    return_interpolated=true,
     progress_cache::Union{IO, AbstractString, Nothing}=nothing
 )
     if isa(nodes, AbstractRange)
@@ -229,11 +237,14 @@ function compute_equilibrium(
         end
     end
 
-    if return_interpolated
-        return interp_policy_functions, interp_value_functions, progress.attention
-    else
-        return progress.calc_policy_functions, interp_value_functions, progress.attention
-    end
+    return Equilibrium(
+        interp_policy_functions,
+        interp_value_functions,
+        progress.attention,
+        progress.calc_policy_functions,
+        progress.calc_value_functions,
+        progress.compute_time
+    )
 end
 
 function create_init_actions(game::DynamicGame, nodes, x0)

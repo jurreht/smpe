@@ -165,12 +165,12 @@ SMPE.transform_state_back(::DeterministicSwitchingModel, state) = SMPE.simplex_t
 SMPE.transform_state_back_jac(::DeterministicSwitchingModel, state) = SMPE.simplex_to_rectangular_jac(state)
 SMPE.transform_state_back_hessian(::DeterministicSwitchingModel, state) = SMPE.simplex_to_rectangular_hess(state)
 
-struct StochasticSwitchingModel <: SwitchingModel
+struct StochasticSwitchingModel{T <: Real} <: SwitchingModel
 	n_firms::Int
-	marginal_cost::Vector{Float64}
+	marginal_cost::Vector{T}
 	switch_cost::Float64
-	mean_L::Float64
-	corr_L::Float64
+	mean_g::Float64
+	corr_g::Float64
 	df_firms::Float64
 	df_consumers::Float64
 	att_cost::Float64
@@ -214,9 +214,8 @@ function SMPE.static_payoff(
 	pi = actions_player[1]
 	p_other = mean(x[1] for x in actions[1:end .!= player_ind])
 	xi = state[player_ind]
-	L = state[game.n_firms + 1]
-	L_past = state[game.n_firms + 1]
-	g = (L - L_past) / (1 + L - L_past)
+	f = state[game.n_firms + 1]
+	g = state[game.n_firms + 2]
 	ci = game.marginal_cost[player_ind]
 
 	# eq. 10
@@ -224,15 +223,15 @@ function SMPE.static_payoff(
 		0.5
 		* (game.n_firms - 1)
 		* ((1 - pi + p_other) + (game.n_firms * xi - 1) * game.switch_cost)
-	)
+	) * f
 
 	# eq. 12
 	demand_young = (
 		0.5 * (game.n_firms - 1) * (1 - pi + p_other) * g
-	)
+	) * f
 
 	# first part of eq. 22
-	return L * (pi - ci) * (demand_young + demand_old)
+	return (pi - ci) * (demand_young + demand_old)
 end
 function SMPE.compute_next_state(
 	game::StochasticSwitchingModel,
@@ -241,12 +240,16 @@ function SMPE.compute_next_state(
 	actions_player,
 	actions
 )
+	if isnothing(actions_player)
+		return [(0., Inf)]
+	end
+
 	next_state = []
 	prices = [i == player_ind ? actions_player[1] : x[1] for (i, x) in enumerate(actions)]
 
-	L = state[game.n_firms + 1]
-	L_past = state[game.n_firms + 1]
-	g = (L - L_past) / (1 + L - L_past)
+	f = state[game.n_firms + 1]
+	g = state[game.n_firms + 2]
+	# Ignore f * g as it would get divided out below anyay
 	market_size = game.n_firms * (game.n_firms - 1) / 2
 	for i in 1:game.n_firms
 		pi = prices[i]
@@ -254,21 +257,22 @@ function SMPE.compute_next_state(
 
 		push!(
 			next_state,
-			0.5 * (game.n_firms - 1) * (1 - pi + p_other) * g / market_size
+			0.5 * (game.n_firms - 1) * (1 - pi + p_other) / market_size
 		)
 	end
 
-	push!(next_state, LogNormal(
-		(1 - game.corr_L) * log(game.mean_L) - .02 + game.corr_L * log(L),
-		0.2 ))
-	push!(next_state, L)
+	push!(next_state, f * g)
+	push!(next_state, Distributions.truncated(Normal(
+		(1 - game.corr_g) * game.mean_g + game.corr_g * g,
+		.2
+	), 0, 1 / game.df_firms))  # upper lim need to get discounting
 
-	state_type = typeof(actions[player_ind]).parameters[1]
-	return convert(Vector{Union{<:Real, LogNormal}}, next_state)
+	return convert(Vector{Union{<:Real, ContinuousUnivariateDistribution}}, next_state)
 end
 function SMPE.compute_default_state(game::StochasticSwitchingModel, player_ind)
 	n_players = SMPE.num_players(game)
-	return vcat(fill(1 / n_players, n_players), game.mean_L, game.mean_L)
+	return vcat(fill(1 / n_players, n_players), 1., game.mean_g)
+	# return vcat(fill(0, n_players), game.mean_L, game.mean_L)
 end
 
 # Static NE of Somaini & Einav (2013) given by eq 5
@@ -307,10 +311,10 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 	# policy functions. They are calculated using the code from Somaini's
 	# website.
 	switching_eqs = (
-	    SwitchingEq(0, 0.9, 2, 1, 0, 1, 0.3333),
-		SwitchingEq(0, 0.9, 3, 1, 0, 1, 0.4),
-	    SwitchingEq(0.5, 0.9, 2, 1, 0.1681, 0.7940, 0.3656),
-		SwitchingEq(0.5, 0.9, 3, 1, 0.3033, 0.7524, 0.4429),
+	    SwitchingEq(0., 0.9, 2, 1., 0, 1, 0.3333),
+	    SwitchingEq(0.5, 0.9, 2, 1., 0.1681, 0.7940, 0.3656),
+		SwitchingEq(0., 0.9, 3, 1., 0, 1, 0.4),
+		SwitchingEq(0.5, 0.9, 3, 1., 0.3033, 0.7524, 0.4429),
 	)
 
 	@testset "Somaini and Einav (2013) without attention costs" for (eq, mc1) in Iterators.product(switching_eqs, (0, .5))
@@ -334,12 +338,12 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		@test all(out.attention .== 1)
 	end
 
-	@testset "Somaini and Einav (2013) with attention costs" for (eq, mc1) in Iterators.product(switching_eqs, [0, .5])
+	@testset "Somaini and Einav (2013) with attention costs" for (eq, mc1) in Iterators.product(switching_eqs, [0])#, .5])
 		mc = zeros(eq.N)
 		mc[1] = mc1
 
 		game = DeterministicSwitchingModel(eq.N, mc, eq.s, eq.g, eq.df, 0, .1)
-		grid = fill(range(0, 1, length=10), eq.N - 1)
+		grid = fill(range(0.01, .99, length=10), eq.N - 1)
 		out = compute_equilibrium(game, grid)
 
 		# The SMPE is just no attention to anything and repeated play
@@ -357,10 +361,11 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		mc = zeros(eq.N)
 		mc[1] = mc1
 
-		game = StochasticSwitchingModel(eq.N, mc, eq.s, eq.g, .7, eq.df, 0, .1)
+		game = StochasticSwitchingModel(eq.N, mc, eq.s, eq.g, .7, eq.df, 0., .1)
 		grid = vcat(
 			fill(range(.01, .99, length=10), eq.N - 1),
-			fill(range(.1, 2, length=10), 2)
+			[range(.1, 2, length=10)],
+			[range(0, 1 / game.df_firms, length=10)]
 		)
 
 		out = compute_equilibrium(game, grid)

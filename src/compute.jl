@@ -266,21 +266,21 @@ function innerloop_for_player!(
             # Substitute default state for actual state if agent does not pay attention
             default_node = transform_state_back(game, default_state)
             relevant_nodes = Iterators.product((
-                attention[i] > 0 ? nodes[i] : [default_node[i]]
+                attention[i] > options.attention_cutoff ? nodes[i] : [default_node[i]]
                 for i in 1:dim_rectangular_state(game)
             )...)
             calc = Array{Float64}(undef, size(relevant_nodes)..., num_actions(game, player_ind))
             inds = eachindex(Slices(calc, dim_rectangular_state(game) + 1))
             Threads.@threads for node_ind in inds
-                state = transform_state(game, relevant_nodes[node_ind])
+                state = perceived_state(
+                    game,
+                    transform_state(game, relevant_nodes[node_ind]),
+                    attention,
+                    default_state
+                )
                 calc[node_ind, :] = calculate_optimal_actions(
                     game,
-                    perceived_state(
-                        game,
-                        state,
-                        attention,
-                        default_state
-                    ),
+                    state,
                     player_ind,
                     interp_value_function,
                     prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
@@ -341,56 +341,115 @@ function calculate_attention(
         pf_player -> map(pf -> pf(default_state...), pf_player),
         interp_policy_funcs[1:end .!= player_ind]
     )
-    default_actions = calculate_optimal_actions(
-        game,
-        default_state,
-        player_ind,
-        interp_value_function,
-        nothing,
-        actions_others,
-        options
-    )
-    @debug "Default state $(default_state), default actions $(default_actions)"
-    n_actions_player = num_actions(game, player_ind)
-    hess_value_actions = Matrix{Float64}(undef, n_actions_player, n_actions_player)
-
-    # Calculate next_state here so that calculate_derivative_actions_state()
-    # can dispath on its type
-    next_state = compute_next_state(
-        game,
-        default_state,
-        player_ind,
-        default_actions,
-        pad_actions(game, actions_others, player_ind)
-    )
-
-    deriv_actions_state = calculate_derivative_actions_state(
-        game,
-        default_state,
-        next_state,
-        player_ind,
-        interp_value_function,
-        default_actions,
-        actions_others,
-        options,
-        hess_value_actions
-    )
-    state_var = simulate_state_variance(
-        game,
-        default_state,
-        player_ind,
-        default_actions,
-        interp_policy_funcs,
-        options
-    )
-    benefit_attention = -1 * state_var .* diag(
-        transpose(deriv_actions_state) *
-        hess_value_actions *
-        deriv_actions_state
-    )
-    @debug "Benefit attention = $(benefit_attention)"
+    @debug "Default state $(default_state)"
     att_cost = attention_cost(game, player_ind)
-    return [attention_function(game, ba / att_cost) for ba in benefit_attention]
+    if options.use_static_attention
+        actions_own = eval_policy_function(interp_policy_funcs[player_ind], default_state)
+        state_var = simulate_state_variance(game, default_state, player_ind, actions_own, interp_policy_funcs, options)
+        padded_actions = pad_actions(game, actions_others, player_ind)
+        x0 = collect(compute_optimization_x0(game, default_state, player_ind, nothing, nothing, padded_actions))
+        bounds = compute_action_bounds(game, default_state, player_ind, nothing, nothing, padded_actions)
+        lb = [isnothing(bounds[i][1]) ? -Inf : bounds[i][1] for i in eachindex(bounds)]
+        ub = [isnothing(bounds[i][2]) ? Inf : bounds[i][2] for i in eachindex(bounds)]
+
+        attention = Vector{Float64}(undef, dim_state(game))
+        for state_ind in 1:dim_state(game)
+            if any(-Inf .< lb) || any(Inf .> ub)
+                res = Optim.optimize(
+                    x -> -1 * static_benefit_attention(game, player_ind, default_state, x, actions_others, state_ind),
+                    lb,
+                    ub,
+                    x0,
+                    Fminbox(LBFGS());
+                    autodiff=:forward
+                )
+            else
+                res = Optim.optimize(
+                    x -> -1 * static_benefit_attention(game, player_ind, default_state, x, actions_others, state_ind),
+                    x0,
+                    LBFGS();
+                    autodiff=:forward
+                )
+            end
+            if !Optim.converged(res)
+                throw("No convergence when calculating attention")
+            end
+            benefit_attention = -1 * state_var[state_ind] * Optim.minimum(res)
+            attention[state_ind] = attention_function(game, benefit_attention / att_cost)
+        end
+    else
+        default_actions = calculate_optimal_actions(
+            game,
+            default_state,
+            player_ind,
+            interp_value_function,
+            nothing,
+            actions_others,
+            options
+        )
+        n_actions_player = num_actions(game, player_ind)
+        hess_value_actions = Matrix{Float64}(undef, n_actions_player, n_actions_player)
+        # Calculate next_state here so that calculate_derivative_actions_state()
+        # can dispath on its type
+        next_state = compute_next_state(
+            game,
+            default_state,
+            player_ind,
+            default_actions,
+            pad_actions(game, actions_others, player_ind)
+        )
+        deriv_actions_state = calculate_derivative_actions_state(
+            game,
+            default_state,
+            next_state,
+            player_ind,
+            interp_value_function,
+            default_actions,
+            actions_others,
+            options,
+            hess_value_actions
+        )
+        state_var = simulate_state_variance(
+            game,
+            default_state,
+            player_ind,
+            default_actions,
+            interp_policy_funcs,
+            options
+        )
+        benefit_attention = -1 * state_var .* diag(
+            transpose(deriv_actions_state) *
+            hess_value_actions *
+            deriv_actions_state
+        )
+        attention = [attention_function(game, ba / att_cost) for ba in benefit_attention]
+    end
+    return attention
+end
+
+function static_benefit_attention(
+    game::DynamicGame,
+    player_ind,
+    default_state,
+    actions_player,
+    actions_others,
+    state_ind
+)
+    padded_actions_others = pad_actions(game, actions_others, player_ind)
+    constant_state = vcat(default_state[1:state_ind-1], default_state[1+state_ind:end])
+    total_hessian = ForwardDiff.hessian(
+        x -> static_payoff(
+            game,
+            vcat(constant_state[1:state_ind-1], x[1], constant_state[state_ind:end]), # state
+            player_ind,
+            x[2:end],  # actions_player
+            padded_actions_others
+        ),
+        vcat(default_state[state_ind], actions_player)
+    )
+    d_action_state = total_hessian[2:end, 1]
+    d_action_action = total_hessian[2:end, 2:end]
+    return -1 * dot(d_action_state, d_action_action \ d_action_state)
 end
 
 function calculate_derivative_actions_state(
@@ -596,7 +655,8 @@ function calculate_optimal_actions(
     interp_value_function,
     actions_state,
     actions_others,
-    options::SMPEOptions
+    options::SMPEOptions,
+    dynamic=true
 )
     padded_actions = pad_actions(game, actions_others, player_ind)
     # The collect is necessary because of some JuliennedArrays magic in
@@ -604,7 +664,7 @@ function calculate_optimal_actions(
     # collect(...) makes sure we have an Array{T, 1} here.
     x0 = collect(compute_optimization_x0(game, state, player_ind, interp_value_function, actions_state, padded_actions))
     bounds = compute_action_bounds(game, state, player_ind, interp_value_function, actions_state, padded_actions)
-    return maximize_payoff(game, state, player_ind, interp_value_function, actions_others, x0, bounds, options)
+    return maximize_payoff(game, state, player_ind, interp_value_function, actions_others, x0, bounds, options, dynamic)
 end
 
 function maximize_payoff(
@@ -615,7 +675,8 @@ function maximize_payoff(
     actions_others,
     x0,
     bounds,
-    options::SMPEOptions
+    options::SMPEOptions,
+    dynamic
 )
     lb = [isnothing(bounds[i][1]) ? -Inf : bounds[i][1] for i in eachindex(bounds)]
     ub = [isnothing(bounds[i][2]) ? Inf : bounds[i][2] for i in eachindex(bounds)]
@@ -623,8 +684,8 @@ function maximize_payoff(
     if any(-Inf .< lb) || any(Inf .> ub)
         # Constrained optimization
         results = optimize(
-            x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options),
-            (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options),
+            x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options, dynamic),
+            (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options, dynamic),
             lb,
             ub,
             x0,
@@ -634,8 +695,8 @@ function maximize_payoff(
     else
         # Unconstrained optimazation
         results = optimize(
-            x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options),
-            (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options),
+            x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options, dynamic),
+            (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options, dynamic),
             x0,
             options.optim_method,
             options.optim_options
@@ -654,12 +715,13 @@ function calculate_negative_payoff(
     interp_value_function,
     actions,
     actions_others,
-    options::SMPEOptions
+    options::SMPEOptions,
+    dynamic::Bool
 )
     padded_actions = pad_actions(game, actions_others, player_ind)
     payoff_now = static_payoff(game, state, player_ind, actions, padded_actions)
     delta = discount_factor(game, player_ind)
-    if delta > 0
+    if delta > 0 && dynamic
         next_state = compute_next_state(game, state, player_ind, actions, padded_actions)
         payoff = payoff_now + (
             delta *
@@ -679,7 +741,8 @@ function calculate_negative_payoff_gradient!(
     actions,
     actions_others,
     out,
-    options::SMPEOptions
+    options::SMPEOptions,
+    dynamic::Bool
 )
     padded_actions_others = pad_actions(game, actions_others, player_ind)
     payoff_now_grad = ForwardDiff.gradient(
@@ -692,7 +755,7 @@ function calculate_negative_payoff_gradient!(
         ), actions
     )
     delta = discount_factor(game, player_ind)
-    if delta > 0
+    if delta > 0 && dynamic
         next_state = compute_next_state(game, state, player_ind, actions, padded_actions_others)
         vf_grad = value_function_gradient_for_actions(
             game,

@@ -374,7 +374,7 @@ function calculate_attention(
             if !Optim.converged(res)
                 throw("No convergence when calculating attention")
             end
-            benefit_attention = -1 * state_var[state_ind] * Optim.minimum(res)
+            benefit_attention = -.5 * state_var[state_ind] * Optim.minimum(res)
             attention[state_ind] = attention_function(game, benefit_attention / att_cost)
         end
     else
@@ -417,7 +417,7 @@ function calculate_attention(
             interp_policy_funcs,
             options
         )
-        benefit_attention = -1 * state_var .* diag(
+        benefit_attention = -.5 * state_var .* diag(
             transpose(deriv_actions_state) *
             hess_value_actions *
             deriv_actions_state

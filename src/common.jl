@@ -10,6 +10,7 @@
     integration_abs_tol::Real = 1e-3
     attention_cutoff::Real = 1e-4
     use_static_attention::Bool = false
+    att_cost_bracket_step::Float64 = 5e-3
 end
 
 DEFAULT_OPTIONS = SMPEOptions()
@@ -50,12 +51,41 @@ function Interpolations.hessian(itp::TransformedInterpolation, x...)
     )
 end
 
-struct Equilibrium{S <: AbstractArray{T, N} where {T <: Real, N}, T <: TransformedInterpolation}
+struct SparseInterpolation{N, T, NT, S <: AbstractInterpolation{N, T, NT}} <: AbstractInterpolation{N, T, NT}
+    itp::S
+    active_states::BitArray{1}
+    bounds::Vector{Tuple{Float64, Float64}}
+end
+# This is the type used in Interpolations.jl. Without using this type, method
+# calls on SparseInterpolation are ambiguous
+const VarArgType = Union{Number, AbstractArray{T, 1} where T, CartesianIndex}
+#(itp::SparseInterpolation)(x::VarArgType...) = itp.itp(x[itp.active_states]...)
+function (itp::SparseInterpolation)(x::VarArgType...)
+    itp.itp(x[itp.active_states]...)
+end
+function Interpolations.gradient(itp::SparseInterpolation, x::VarArgType...)
+    grad = zeros(length(itp.active_states))
+    grad[itp.active_states] = Interpolations.gradient(itp.itp, x[itp.active_states]...)
+    return grad
+end
+function Interpolations.hessian(itp::SparseInterpolation, x::VarArgType...)
+    hess = zeros(length(itp.active_states), length(itp.active_states))
+    hess[itp.active_states, itp.active_states] = Interpolations.hessian(itp.itp, x[itp.active_states]...)
+    return hess
+end
+
+struct ConstantInterpolation{T <: Real} <: SMPEInterpolation{T}
+    val::T
+    bounds::Vector{Tuple{Float64, Float64}}
+end
+(itp::ConstantInterpolation)(x...) = itp.val
+Interpolations.gradient(itp::ConstantInterpolation, x...) = zeros(length(x))
+Interpolations.hessian(itp::ConstantInterpolation, x...) = zeros(length(x), length(x))
+
+struct Equilibrium{T <: SMPEInterpolation}
     pf::Vector{Vector{T}}
     vf::Vector{T}
     attention::Matrix{Float64}
-    pf_at_nodes::Vector{S}
-    vf_at_nodes::S
     compute_time::Float64
 end
 
@@ -79,11 +109,17 @@ end
 pad_actions(game::DynamicGame, actions_others::AbstractVector{<:AbstractArray}, player_ind)::Vector{Vector{Float64}} = [zeros(num_actions(game, player_ind))]
 
 interpolate_value_function(game::DynamicGame, states, calc_value_function) = interpolate_function(game, states, calc_value_function)
+interpolate_value_function(game::DynamicGame, states, attention, calc_value_function, options::SMPEOptions=DEFAULT_OPTIONS) = interpolate_function(game, states, attention, calc_value_function, options)
 
 interpolate_policy_function(game::DynamicGame, states, calc_policy_function) = [
     interpolate_function(game, states, calc_policy_function[fill(:, length(states))..., i])
     for i in 1:size(calc_policy_function, length(states) + 1)
 ]
+interpolate_policy_function(game::DynamicGame, states, attention, calc_policy_function, options::SMPEOptions=DEFAULT_OPTIONS) = [
+    interpolate_function(game, states, attention, calc_policy_function[fill(:, length(states))..., i], options)
+    for i in 1:size(calc_policy_function, length(states) + 1)
+]
+
 
 function interpolate_function(game::DynamicGame, states, vals)
     itp = interpolate(vals, BSpline(Cubic(Line(OnGrid()))))
@@ -92,6 +128,26 @@ function interpolate_function(game::DynamicGame, states, vals)
     # extrapolate much beyond that
     etp = extrapolate(Interpolations.scale(itp, states...), Interpolations.Flat())
     return TransformedInterpolation(etp, game)
+end
+
+function interpolate_function(game::DynamicGame, states, attention, vals, options::SMPEOptions=DEFAULT_OPTIONS)
+    bounds = [(minimum(s), maximum(s)) for s in states]
+    notsparse = attention .> options.attention_cutoff
+    if sum(notsparse) > 0
+        if length(states) > sum(notsparse)
+            states = states[notsparse]
+        end
+        if length(size(vals)) > sum(notsparse)
+            vals = vals[(att ? Colon() : 1 for att in notsparse)...]
+        end
+
+        itp = interpolate(vals, BSpline(Cubic(Line(OnGrid()))))
+        etp = extrapolate(Interpolations.scale(itp, states...), Interpolations.Flat())
+        return TransformedInterpolation(SparseInterpolation(etp, notsparse, bounds), game)
+    else
+        # Full inattention, no point in interpolating
+        return ConstantInterpolation(vals[1], bounds)
+    end
 end
 
 eval_policy_function(policy_function, state) = map(
@@ -341,8 +397,13 @@ function value_function_hessian_for_state(
     return reshape(hess_vectorized, n_deterministic, n_deterministic)
 end
 
-function interpolation_bounds(interp::SMPEInterpolation)
+function interpolation_bounds(interp::TransformedInterpolation)
     itp = interp.interpolation
+
+    if isa(itp, ConstantInterpolation) || isa(itp, SparseInterpolation)
+        return itp.bounds
+    end
+
     # Extrapolated functions have no bounds, give the bounds of the
     # underlying interpolated function
     vf_bounds = (isa(itp, AbstractExtrapolation)
@@ -352,6 +413,119 @@ function interpolation_bounds(interp::SMPEInterpolation)
     return collect(zip(
         map(minimum, vf_bounds),
         map(maximum, vf_bounds)))
+end
+
+interpolation_bounds(interp::Union{ConstantInterpolation, SparseInterpolation}) = interp.bounds
+
+function calculate_benefit_attention(
+    game::DynamicGame,
+    default_state,
+    player_ind,
+    interp_value_function,
+    interp_policy_funcs,
+    options::SMPEOptions,
+    scale_by_state_variance=true
+)
+    actions_others = map(
+        pf_player -> map(pf -> pf(default_state...), pf_player),
+        interp_policy_funcs[1:end .!= player_ind]
+    )
+    if options.use_static_attention
+        actions_own = eval_policy_function(interp_policy_funcs[player_ind], default_state)
+        state_var = simulate_state_variance(game, default_state, player_ind, actions_own, interp_policy_funcs, options)
+        padded_actions = pad_actions(game, actions_others, player_ind)
+        x0 = collect(compute_optimization_x0(game, default_state, player_ind, nothing, nothing, padded_actions))
+        bounds = compute_action_bounds(game, default_state, player_ind, nothing, nothing, padded_actions)
+        lb = [isnothing(bounds[i][1]) ? -Inf : bounds[i][1] for i in eachindex(bounds)]
+        ub = [isnothing(bounds[i][2]) ? Inf : bounds[i][2] for i in eachindex(bounds)]
+
+        attention = Vector{Float64}(undef, dim_state(game))
+        benefit_attention = Vector{Float64}(undef, dim_state(game))
+        for state_ind in 1:dim_state(game)
+            if any(-Inf .< lb) || any(Inf .> ub)
+                res = Optim.optimize(
+                    x -> -1 * static_benefit_attention(game, player_ind, default_state, x, actions_others, state_ind),
+                    lb,
+                    ub,
+                    x0,
+                    Fminbox(LBFGS());
+                    autodiff=:forward
+                )
+            else
+                res = Optim.optimize(
+                    x -> -1 * static_benefit_attention(game, player_ind, default_state, x, actions_others, state_ind),
+                    x0,
+                    LBFGS();
+                    autodiff=:forward
+                )
+            end
+            if !Optim.converged(res)
+                throw("No convergence when calculating attention")
+            end
+            benefit_attention[state_ind] = -.5 * state_var[state_ind] * Optim.minimum(res)
+        end
+        return benefit_attention
+    else
+        default_actions = calculate_optimal_actions(
+            game,
+            default_state,
+            player_ind,
+            interp_value_function,
+            nothing,
+            actions_others,
+            options
+        )
+        n_actions_player = num_actions(game, player_ind)
+        hess_value_actions = Matrix{Float64}(undef, n_actions_player, n_actions_player)
+        # Calculate next_state here so that calculate_derivative_actions_state()
+        # can dispath on its type
+        next_state = compute_next_state(
+            game,
+            default_state,
+            player_ind,
+            default_actions,
+            pad_actions(game, actions_others, player_ind)
+        )
+        deriv_actions_state = calculate_derivative_actions_state(
+            game,
+            default_state,
+            next_state,
+            player_ind,
+            interp_value_function,
+            default_actions,
+            actions_others,
+            options,
+            hess_value_actions
+        )
+        state_var = scale_by_state_variance ? simulate_state_variance(
+                game,
+                default_state,
+                player_ind,
+                default_actions,
+                interp_policy_funcs,
+                options
+            ) : 1.
+        return -.5 * state_var .* diag(
+            transpose(deriv_actions_state) *
+            hess_value_actions *
+            deriv_actions_state
+        )
+    end
+end
+
+function calculate_relevant_nodes(
+    game::DynamicGame, nodes, default_state, attention, options::SMPEOptions
+)
+    if all(attention .== 1)
+        return Iterators.product(nodes...)
+    else
+        # Substitute default state for actual state if agent does not pay attention
+        default_node = transform_state_back(game, default_state)
+        return Iterators.product((
+            attention[i] > options.attention_cutoff ? nodes[i] : [default_node[i]]
+            for i in 1:dim_rectangular_state(game)
+        )...)
+    end
 end
 
 # getindex() is not implemented for either Enumerate or ProductIterator.

@@ -1,6 +1,7 @@
 using Distributions
 using Logging
 using Test
+using Random
 using SMPE
 using Statistics
 
@@ -96,7 +97,7 @@ SMPE.compute_optimization_x0(
     game::SwitchingModel, state, player_ind, interp_value_function, actions_player, actions
 ) = isnothing(actions_player) ? [1.] : actions_player
 
-SMPE.dim_state(game::DeterministicSwitchingModel) = game.n_firms
+SMPE.dim_state(game::DeterministicSwitchingModel) = game.n_firms - 1
 SMPE.dim_rectangular_state(game::DeterministicSwitchingModel) = game.n_firms - 1
 function SMPE.static_payoff(
 	game::DeterministicSwitchingModel,
@@ -107,7 +108,7 @@ function SMPE.static_payoff(
 )
 	pi = actions_player[1]
 	p_other = mean(x[1] for x in actions[1:end .!= player_ind])
-	xi = state[player_ind]
+	xi = player_ind <= SMPE.dim_state(game) ? state[player_ind] : 1 - sum(state)
 	ci = game.marginal_cost[player_ind]
 
 	# eq. 10
@@ -135,12 +136,12 @@ function SMPE.compute_next_state(
 	# When there is automatic differentiation, actions[player_ind] may be some
 	# kind of DualNumber. Then zeros() need to create an array of the same type
 	# otherwise we will not be able to assign to next_state below.
-	next_state = zeros(T, game.n_firms)
+	next_state = zeros(T, game.n_firms - 1)
 
 	prices = [i == player_ind ? actions_player[1] : x[1] for (i, x) in enumerate(actions)]
 
 	market_size = game.n_firms * (game.n_firms - 1) / 2
-	for i in 1:game.n_firms
+	for i in 1:(game.n_firms - 1)
 		pi = prices[i]
 		p_other = mean(prices[1:game.n_firms .!= i])
 
@@ -157,7 +158,7 @@ function SMPE.compute_next_state(
 end
 function SMPE.compute_default_state(game::DeterministicSwitchingModel, player_ind)
 	n_players = SMPE.num_players(game)
-	return fill(1 / n_players, n_players)
+	return fill(1 / n_players, n_players - 1)
 end
 SMPE.transform_state(::DeterministicSwitchingModel, state) = SMPE.rectangular_to_simplex(state)
 SMPE.transform_state_jac(::DeterministicSwitchingModel, state) = SMPE.rectangular_to_simplex_jac(state)
@@ -176,7 +177,7 @@ struct StochasticSwitchingModel{T <: Real} <: SwitchingModel
 	att_cost::Float64
 end
 SMPE.dim_rectangular_state(game::StochasticSwitchingModel) = game.n_firms + 1
-SMPE.dim_state(game::StochasticSwitchingModel) = game.n_firms + 2
+SMPE.dim_state(game::StochasticSwitchingModel) = game.n_firms + 1
 SMPE.transform_state(::StochasticSwitchingModel, state) = vcat(
 	SMPE.rectangular_to_simplex(state[1:end-2]),
 	collect(state[end-1:end])
@@ -193,15 +194,15 @@ SMPE.transform_state_back(::StochasticSwitchingModel, state) = vcat(
 	collect(state[end-1:end])
 )
 function SMPE.transform_state_back_jac(game::StochasticSwitchingModel, state)
-	ret = zeros(game.n_firms + 1, game.n_firms + 2)
-	ret[1:game.n_firms - 1, 1:game.n_firms] = SMPE.simplex_to_rectangular_jac(state[1:end-2])
-	ret[game.n_firms, game.n_firms + 1] = 1
-	ret[game.n_firms + 1, game.n_firms + 2] = 1
+	ret = zeros(game.n_firms + 1, game.n_firms + 1)
+	ret[1:game.n_firms - 1, 1:game.n_firms - 1] = SMPE.simplex_to_rectangular_jac(state[1:end-2])
+	ret[game.n_firms, game.n_firms] = 1
+	ret[game.n_firms + 1, game.n_firms + 1] = 1
 	return ret
 end
 function SMPE.transform_state_back_hessian(game::StochasticSwitchingModel, state)
-	ret = zeros(game.n_firms + 1, game.n_firms + 2, game.n_firms + 2)
-	ret[1:game.n_firms - 1, 1:game.n_firms, 1:game.n_firms] = SMPE.simplex_to_rectangular_hess(state)
+	ret = zeros(game.n_firms + 1, game.n_firms + 1, game.n_firms + 1)
+	ret[1:game.n_firms - 1, 1:game.n_firms - 1, 1:game.n_firms - 1] = SMPE.simplex_to_rectangular_hess(state)
 	return ret
 end
 function SMPE.static_payoff(
@@ -213,9 +214,9 @@ function SMPE.static_payoff(
 )
 	pi = actions_player[1]
 	p_other = mean(x[1] for x in actions[1:end .!= player_ind])
-	xi = state[player_ind]
-	f = state[game.n_firms + 1]
-	g = state[game.n_firms + 2]
+	xi = player_ind <= game.n_firms - 1 ? state[player_ind] : 1 - sum(state[1:game.n_firms - 1])
+	f = state[game.n_firms]
+	g = state[game.n_firms + 1]
 	ci = game.marginal_cost[player_ind]
 
 	# eq. 10
@@ -247,11 +248,11 @@ function SMPE.compute_next_state(
 	next_state = []
 	prices = [i == player_ind ? actions_player[1] : x[1] for (i, x) in enumerate(actions)]
 
-	f = state[game.n_firms + 1]
-	g = state[game.n_firms + 2]
+	f = state[game.n_firms]
+	g = state[game.n_firms + 1]
 	# Ignore f * g as it would get divided out below anyay
 	market_size = game.n_firms * (game.n_firms - 1) / 2
-	for i in 1:game.n_firms
+	for i in 1:(game.n_firms - 1)
 		pi = prices[i]
 		p_other = mean(prices[1:game.n_firms .!= i])
 
@@ -271,7 +272,7 @@ function SMPE.compute_next_state(
 end
 function SMPE.compute_default_state(game::StochasticSwitchingModel, player_ind)
 	n_players = SMPE.num_players(game)
-	return vcat(fill(1 / n_players, n_players), 1., game.mean_g)
+	return vcat(fill(1 / n_players, n_players - 1), 1., game.mean_g)
 	# return vcat(fill(0, n_players), game.mean_L, game.mean_L)
 end
 
@@ -281,7 +282,7 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 	size(Iterators.product(grid...))
 ), game.marginal_cost)
 
-@time @testset "Compute tests" begin
+@time @testset "Compute and estimation tests" begin
 	@testset "Capital accumulation problem" begin
 		alpha = 0.5
 		beta = 0.95
@@ -289,7 +290,7 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		grid = range(game.k_lowest, 4*game.k_steady_state, length=100)
 		eq = compute_equilibrium(game, grid)
 		policy_exact = alpha * beta * collect(grid) .^ alpha
-		@test eq.pf_at_nodes[1] ≈ policy_exact atol=1e-2 rtol=5e-1
+		@test (@. eq.pf[1][1](grid)) ≈ policy_exact atol=1e-2 rtol=5e-1
 		@test all(eq.attention .== 1)
 	end
 
@@ -326,15 +327,13 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		out = compute_equilibrium(game, grid)
 
 		# Somaini and Einav (2013, Theorem 1)
-		policy_check = map(
-			i -> map(
-				state -> eq.mu0 + mean(mc) + eq.mu1 * (mc[i] - mean(mc)) + eq.beta * state[i],
+		for i in 1:eq.N
+			policy_check = map(
+				state -> eq.mu0 + mean(mc) + eq.mu1 * (mc[i] - mean(mc)) + eq.beta * (i < game.n_firms ? state[i] : 1 - sum(state)),
 				map(node -> SMPE.transform_state(game, node), Iterators.product(grid...)),
-			),
-			1:eq.N
-		)
-
-		@test out.pf_at_nodes ≈ policy_check atol=1e-2 rtol=1e-2
+			)
+			@test map(node -> out.pf[i][1](node), Iterators.product(grid...)) ≈ policy_check atol=1e-2 rtol=1e-2
+		end
 		@test all(out.attention .== 1)
 	end
 
@@ -351,7 +350,9 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 	    # shares.
 		policy_check = somaini_einav_static_eq(game, grid)
 
-		@test out.pf_at_nodes ≈ policy_check atol=1e-2 rtol=1e-2
+		for i in 1:eq.N
+			@test map(node -> out.pf[i][1](node), Iterators.product(grid...)) ≈ policy_check[i] atol=1e-2 rtol=1e-2
+		end
 		@test all(out.attention .== 0.)
 	end
 
@@ -373,7 +374,17 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		# Without switching costs, equilibrium is repetition of static equilibrium
 		policy_check = somaini_einav_static_eq(game, grid)
 
-		@test out.pf_at_nodes ≈ policy_check atol=1e-2 rtol=1e-2
+		for i in 1:eq.N
+			@test map(node -> out.pf[i][1](node), Iterators.product(grid...)) ≈ policy_check[i] atol=1e-2 rtol=1e-2
+		end
 		@test all(out.attention .== 0)
+
+		# Now estimate the model
+		Random.seed!(452)
+		path = simulate_equilibrium_path(game, out, SMPE.compute_default_state(game, 1), 100)
+		for player_ind in 1:eq.N
+			kappa_bounds = estimate_attention_cost(game, player_ind, out.attention[player_ind, :], path, out.pf, grid, (0., .5), .05)
+			@test kappa_bounds == (0., .5)
+		end
 	end
 end

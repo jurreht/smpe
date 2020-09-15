@@ -35,38 +35,28 @@ compute_action_bounds(
 # Helper fuctions
 # Transformation rectangular grid <> simplex
 # Based on https://math.stackexchange.com/a/1945720/404905
-function rectangular_to_simplex(state)
-    state = [state[i] * prod(1 .- state[i+1:end]) for i in eachindex(state)]
-    return vcat(state, [1 - sum(state)])
-end
+rectangular_to_simplex(state) = [state[i] * prod(1 .- state[i+1:end]) for i in eachindex(state)]
 function rectangular_to_simplex_jac(state)
     ret = zeros(length(state), length(state))
     for i in eachindex(state)
         ret[i, i:end] .= prod(1 .- state[i+1:end])
-        ret[i, (i+1):end] ./= -1 .* (1 .- state[i+1:end])
     end
     return ret
 end
-function simplex_to_rectangular(state)
-    state = state[1:end-1]
-    return [state[i] / (1 - sum_state_others(state, i)) for i in eachindex(state)]
-end
+simplex_to_rectangular(state) = [state[i] / (1 - sum_state_others(state, i)) for i in eachindex(state)]
 function simplex_to_rectangular_jac(state)
-    state = state[1:end-1]
-    ret = zeros(length(state), length(state) + 1)
+    ret = zeros(length(state), length(state))
     for i in eachindex(state)
         ret[i, i] = 1 / (1 - sum_state_others(state, i))
-        ret[i, i+1:(end-1)] .= state[i] / (1 - sum_state_others(state, i))^2
     end
     return ret
 end
 function simplex_to_rectangular_hess(state)
-    state = state[1:end-1]
-    ret = zeros(length(state), length(state) + 1, length(state) + 1)
+    ret = zeros(length(state), length(state), length(state))
     for i in eachindex(state)
-        ret[i, i, i+1:(end-1)] .= 1 / (1 - sum_state_others(state, i))^2
-        ret[i, i+1:(end-1), i] .= 1 / (1 - sum_state_others(state, i))^2
-        ret[i, i+1:(end-1), i+1:(end-1)] .= 2 * state[i] / (1 - sum_state_others(state, i))^3
+        ret[i, i, i+1:end] .= 1 / (1 - sum_state_others(state, i))^2
+        ret[i, i+1:end, i] .= 1 / (1 - sum_state_others(state, i))^2
+        ret[i, i+1:end, i+1:end] .= 2 * state[i] / (1 - sum_state_others(state, i))^3
     end
     return ret
 end

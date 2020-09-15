@@ -3,10 +3,10 @@ struct OptimizationConvergenceError <: Exception
 end
 Base.showerror(io::IO, e::OptimizationConvergenceError) = print(io, "optimization did not converge")
 
-mutable struct SolutionProgress{S <: AbstractArray{T, N} where {T <: Real, N}}
-    calc_policy_functions::Vector{S}
-    calc_value_functions::S
-    prev_value_functions::S
+mutable struct SolutionProgress
+    calc_policy_functions::Vector{Array{Float64}}
+    calc_value_functions::Vector{Array{Float64}}
+    prev_value_functions::Vector{Array{Float64}}
     prev_optimal::Vector{Bool}
     attention::Matrix{Float64}
     converged::Vector{Bool}
@@ -28,7 +28,6 @@ function compute_equilibrium(
         throw(ArgumentError("State nodes must be of dimension dim_rectangular_state=$(dim_rectangular_state(game))"))
     end
     n_nodes = prod(length(s) for s in nodes)
-    ALLNODES = fill(:, dim_rectangular_state(game))
 
     init_variables = true
     # progress = nothing
@@ -54,18 +53,24 @@ function compute_equilibrium(
         )
     end
 
-    interp_policy_functions = Vector{Vector{TransformedInterpolation}}(undef, num_players(game))
-    interp_value_functions = Vector{TransformedInterpolation}(undef, num_players(game))
+    interp_policy_functions = Vector{Vector{SMPEInterpolation}}(undef, num_players(game))
+    interp_value_functions = Vector{SMPEInterpolation}(undef, num_players(game))
     Threads.@threads for player_ind in 1:num_players(game)
+        # For first interpolatipn, we just attention to zero everywhere.
+        # This leads to the fastest initilaziation
         interp_policy_functions[player_ind] = interpolate_policy_function(
             game,
             nodes,
-            progress.calc_policy_functions[player_ind]
+            zeros(dim_rectangular_state(game)),
+            progress.calc_policy_functions[player_ind],
+            options
         )
         interp_value_functions[player_ind] = interpolate_value_function(
             game,
             nodes,
-            progress.calc_value_functions[player_ind, ALLNODES...]
+            zeros(dim_rectangular_state(game)),
+            progress.calc_value_functions[player_ind],
+            options
         )
     end
 
@@ -76,7 +81,7 @@ function compute_equilibrium(
         @info "Initial contraction mapping"
         for i in 1:num_players(game)
             progress.compute_time += @elapsed begin
-                progress.calc_value_functions[i, ALLNODES...], interp_value_functions[i] = calculate_value_function(
+                progress.calc_value_functions[i], interp_value_functions[i] = calculate_value_function(
                     game,
                     nodes,
                     Iterators.product(nodes...),
@@ -104,7 +109,7 @@ function compute_equilibrium(
             end
 
             progress.compute_time += @elapsed begin
-                progress.calc_value_functions[player_ind, ALLNODES...], interp_value_functions[player_ind], progress.attention[player_ind, :] = innerloop_for_player!(
+                progress.calc_value_functions[player_ind], interp_value_functions[player_ind], progress.attention[player_ind, :] = innerloop_for_player!(
                     game,
                     nodes,
                     player_ind,
@@ -118,8 +123,8 @@ function compute_equilibrium(
                 if progress.prev_optimal[player_ind]  # At least one iteration done before => can check convergence
                     vf_norm = value_function_norm(
                         game,
-                        progress.calc_value_functions[player_ind, ALLNODES...],
-                        progress.prev_value_functions[player_ind, ALLNODES...]
+                        progress.calc_value_functions[player_ind],
+                        progress.prev_value_functions[player_ind]
                     )
                     @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
                     if vf_norm < options.eps_outer
@@ -137,11 +142,10 @@ function compute_equilibrium(
                 # this to innerloop_for_player().
                 progress.prev_optimal[player_ind] = true
 
-                progress.prev_value_functions[player_ind, ALLNODES...] = progress.calc_value_functions[player_ind, ALLNODES...]
+                progress.prev_value_functions[player_ind] = progress.calc_value_functions[player_ind]
 
                 progress.last_player = player_ind < num_players(game) ? player_ind : 0
             end
-
 
             if !isnothing(progress_cache)
                 serialize(progress_cache, progress)
@@ -153,8 +157,6 @@ function compute_equilibrium(
         interp_policy_functions,
         interp_value_functions,
         progress.attention,
-        progress.calc_policy_functions,
-        progress.calc_value_functions,
         progress.compute_time
     )
 end
@@ -193,10 +195,9 @@ function create_init_actions(game::DynamicGame, nodes, x0)
     end
 end
 
-initialize_value_functions(game::DynamicGame, nodes) = zeros(
-    num_players(game),
-    (length(node_base) for node_base in nodes)...
-)
+initialize_value_functions(game::DynamicGame, nodes) = [
+    zeros((length(node_base) for node_base in nodes)...)
+    for i in 1:num_players(game)]
 
 function innerloop_for_player!(
     game::DynamicGame,
@@ -235,68 +236,34 @@ function innerloop_for_player!(
         @debug "Attention vector = $(attention)"
 
         @info "Calculating policy function..."
-        if all(attention .== 1)
-            # The agent pays (at least partial) attention to the full state. This means that we
-            # do not interpolation to predict the other agents' actions as the
-            # relevant states will be precisely the elements in states.
-            relevant_nodes = Iterators.product(nodes...)
-            # relevant_nodes supports fast linear indexing, while calc_policy_functions
-            # does not. Hence we get the indices from calc_policy_functions
-            # to get a CartesianIndex
-            inds = eachindex(Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1))
-            Threads.@threads for node_ind in inds
-                calc_policy_functions[player_ind][node_ind, :] = calculate_optimal_actions(
-                    game,
-                    perceived_state(
-                        game,
-                        transform_state(game, collect(relevant_nodes[node_ind])),
-                        attention,
-                        default_state
-                    ),
-                    player_ind,
-                    interp_value_function,
-                    # prev_optimal ? Slices(calc_policy_functions[player_ind], dim_rectangular_state(game) + 1)[node_ind] : nothing,
-                    prev_optimal ? calc_policy_functions[player_ind][node_ind, :] : nothing,
-                    [pf[node_ind, :] for pf in calc_policy_functions[1:end .!= player_ind]],
-                    #[Slices(pf, dim_rectangular_state(game) + 1)[node_ind] for pf in calc_policy_functions[1:end .!= player_ind]],
-                    options
-                )
-            end
-        else
-            # Substitute default state for actual state if agent does not pay attention
-            default_node = transform_state_back(game, default_state)
-            relevant_nodes = Iterators.product((
-                attention[i] > options.attention_cutoff ? nodes[i] : [default_node[i]]
-                for i in 1:dim_rectangular_state(game)
-            )...)
-            calc = Array{Float64}(undef, size(relevant_nodes)..., num_actions(game, player_ind))
-            inds = eachindex(Slices(calc, dim_rectangular_state(game) + 1))
-            Threads.@threads for node_ind in inds
-                state = perceived_state(
-                    game,
-                    transform_state(game, relevant_nodes[node_ind]),
-                    attention,
-                    default_state
-                )
-                calc[node_ind, :] = calculate_optimal_actions(
-                    game,
-                    state,
-                    player_ind,
-                    interp_value_function,
-                    prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
-                    [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
-                    options
-                )
-            end
-            # Repeat optimal policies across states that the agent does not pay attention to
-            nreps = vcat(
-                [attention[i] > 0 ? 1 : length(nodes[i]) for i in 1:dim_rectangular_state(game)], # state
-                [1] # actions
+        # Substitute default state for actual state if agent does not pay attention
+        default_node = transform_state_back(game, default_state)
+        relevant_nodes = Iterators.product((
+            attention[i] > options.attention_cutoff ? nodes[i] : [default_node[i]]
+            for i in 1:dim_rectangular_state(game)
+        )...)
+        calc = Array{Float64}(undef, size(relevant_nodes)..., num_actions(game, player_ind))
+        inds = eachindex(Slices(calc, dim_rectangular_state(game) + 1))
+        Threads.@threads for node_ind in inds
+            state = perceived_state(
+                game,
+                collect(transform_state(game, relevant_nodes[node_ind])),
+                attention,
+                default_state
             )
-            calc_policy_functions[player_ind] = repeat(calc; outer=nreps)
+            calc[node_ind, :] = calculate_optimal_actions(
+                game,
+                state,
+                player_ind,
+                interp_value_function,
+                prev_optimal ? eval_policy_function(interp_policy_functions[player_ind], state) : nothing,
+                [eval_policy_function(pf, state) for pf in interp_policy_functions[1:end .!= player_ind]],
+                options
+            )
         end
+        calc_policy_functions[player_ind] = calc
         interp_policy_functions[player_ind] = interpolate_policy_function(
-            game, nodes, calc_policy_functions[player_ind]
+            game, nodes, attention, calc_policy_functions[player_ind], options
         )
 
         @info "Contraction mapping..."
@@ -337,94 +304,17 @@ function calculate_attention(
     interp_policy_funcs,
     options::SMPEOptions
 )
-    actions_others = map(
-        pf_player -> map(pf -> pf(default_state...), pf_player),
-        interp_policy_funcs[1:end .!= player_ind]
-    )
     @debug "Default state $(default_state)"
+    benefit_attention = calculate_benefit_attention(
+        game,
+        default_state,
+        player_ind,
+        interp_value_function,
+        interp_policy_funcs,
+        options
+    )
     att_cost = attention_cost(game, player_ind)
-    if options.use_static_attention
-        actions_own = eval_policy_function(interp_policy_funcs[player_ind], default_state)
-        state_var = simulate_state_variance(game, default_state, player_ind, actions_own, interp_policy_funcs, options)
-        padded_actions = pad_actions(game, actions_others, player_ind)
-        x0 = collect(compute_optimization_x0(game, default_state, player_ind, nothing, nothing, padded_actions))
-        bounds = compute_action_bounds(game, default_state, player_ind, nothing, nothing, padded_actions)
-        lb = [isnothing(bounds[i][1]) ? -Inf : bounds[i][1] for i in eachindex(bounds)]
-        ub = [isnothing(bounds[i][2]) ? Inf : bounds[i][2] for i in eachindex(bounds)]
-
-        attention = Vector{Float64}(undef, dim_state(game))
-        for state_ind in 1:dim_state(game)
-            if any(-Inf .< lb) || any(Inf .> ub)
-                res = Optim.optimize(
-                    x -> -1 * static_benefit_attention(game, player_ind, default_state, x, actions_others, state_ind),
-                    lb,
-                    ub,
-                    x0,
-                    Fminbox(LBFGS());
-                    autodiff=:forward
-                )
-            else
-                res = Optim.optimize(
-                    x -> -1 * static_benefit_attention(game, player_ind, default_state, x, actions_others, state_ind),
-                    x0,
-                    LBFGS();
-                    autodiff=:forward
-                )
-            end
-            if !Optim.converged(res)
-                throw("No convergence when calculating attention")
-            end
-            benefit_attention = -.5 * state_var[state_ind] * Optim.minimum(res)
-            attention[state_ind] = attention_function(game, benefit_attention / att_cost)
-        end
-    else
-        default_actions = calculate_optimal_actions(
-            game,
-            default_state,
-            player_ind,
-            interp_value_function,
-            nothing,
-            actions_others,
-            options
-        )
-        n_actions_player = num_actions(game, player_ind)
-        hess_value_actions = Matrix{Float64}(undef, n_actions_player, n_actions_player)
-        # Calculate next_state here so that calculate_derivative_actions_state()
-        # can dispath on its type
-        next_state = compute_next_state(
-            game,
-            default_state,
-            player_ind,
-            default_actions,
-            pad_actions(game, actions_others, player_ind)
-        )
-        deriv_actions_state = calculate_derivative_actions_state(
-            game,
-            default_state,
-            next_state,
-            player_ind,
-            interp_value_function,
-            default_actions,
-            actions_others,
-            options,
-            hess_value_actions
-        )
-        state_var = simulate_state_variance(
-            game,
-            default_state,
-            player_ind,
-            default_actions,
-            interp_policy_funcs,
-            options
-        )
-        benefit_attention = -.5 * state_var .* diag(
-            transpose(deriv_actions_state) *
-            hess_value_actions *
-            deriv_actions_state
-        )
-        attention = [attention_function(game, ba / att_cost) for ba in benefit_attention]
-    end
-    return attention
+    return [attention_function(game, b / att_cost) for b in benefit_attention]
 end
 
 function static_benefit_attention(
@@ -683,6 +573,20 @@ function maximize_payoff(
 
     if any(-Inf .< lb) || any(Inf .> ub)
         # Constrained optimization
+
+        # Make sure starting value is withing bounds
+        for i in 1:length(x0)
+            if x0[i] < lb[i] || x0[i] > ub[i]
+                if isinf(lb[i])
+                    x0[i] = ub[i] - 1
+                elseif isinf(ub[i])
+                    x0[i] = lb[i] + 1
+                else
+                    x0[i] = (ub[i] + lb[i]) / 2
+                end
+            end
+        end
+
         results = optimize(
             x -> calculate_negative_payoff(game, state, player_ind, interp_value_function, x, actions_others, options, dynamic),
             (g, x) -> calculate_negative_payoff_gradient!(game, state, player_ind, interp_value_function, x, actions_others, g, options, dynamic),
@@ -878,12 +782,12 @@ function calculate_value_function(
                 options
             )
         end
-        repeat_calc_vf = [
-            indim == 1 ? outdim : 1
-            for (indim, outdim)
-            in zip(size(relevant_nodes), (length(s) for s in nodes))
-        ]
-        calc_value_function = repeat(calc_value_function, repeat_calc_vf...)
+        # repeat_calc_vf = [
+        #     indim == 1 ? outdim : 1
+        #     for (indim, outdim)
+        #     in zip(size(relevant_nodes), (length(s) for s in nodes))
+        # ]
+        # calc_value_function = repeat(calc_value_function, repeat_calc_vf...)
 
         if !isnothing(prev_value_function)
             diff = value_function_norm(game, calc_value_function, prev_value_function)
@@ -892,7 +796,7 @@ function calculate_value_function(
                 break
             end
         end
-        interp_value_function = interpolate_value_function(game, nodes, calc_value_function)
+        interp_value_function = interpolate_value_function(game, nodes, attention, calc_value_function, options)
         prev_value_function = copy(calc_value_function)
     end
     return calc_value_function, interp_value_function

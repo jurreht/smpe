@@ -379,6 +379,12 @@ somaini_einav_static_eq(game, grid) = map(mci -> fill(
 		end
 		@test all(out.attention .== 0)
 
+		# Test if equilibrium is the same if we fix attention
+		out_fixed_att = compute_equilibrium(game, grid; fix_attention=out.attention)
+		for i in 1:eq.N
+			@test map(node -> out.pf[i][1](node), Iterators.product(grid...)) == map(node -> out.pf[i][1](node), Iterators.product(grid...))
+		end
+
 		# Now estimate the model
 		Random.seed!(452)
 		path = simulate_equilibrium_path(game, out, SMPE.compute_default_state(game, 1), 100)

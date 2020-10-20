@@ -19,7 +19,8 @@ function compute_equilibrium(
     nodes::Union{AbstractRange, Vector{<:AbstractRange}};
     x0=nothing,
     options::SMPEOptions=DEFAULT_OPTIONS,
-    progress_cache::Union{IO, AbstractString, Nothing}=nothing
+    progress_cache::Union{IO, AbstractString, Nothing}=nothing,
+    fix_attention::Union{<:AbstractMatrix{Float64}, Nothing}=nothing
 )
     if isa(nodes, AbstractRange)
         nodes = [nodes]
@@ -41,12 +42,13 @@ function compute_equilibrium(
         end
     end
     if init_variables  # No progress cache given or progress cache is empty
+        att0 = isnothing(fix_attention) ? fill(1.0, (num_players(game), dim_state(game))) : fix_attention
         progress = SolutionProgress(
             create_init_actions(game, nodes, x0),
             initialize_value_functions(game, nodes),
             initialize_value_functions(game, nodes),  # It only matters that we get the shape right for now
             fill(isnothing(x0) ? false : true, num_players(game)),
-            fill(1.0, (num_players(game), dim_state(game))),
+            att0,
             fill(false, num_players(game)),
             0,
             0.
@@ -117,6 +119,7 @@ function compute_equilibrium(
                     progress.calc_policy_functions,
                     interp_policy_functions,
                     progress.prev_optimal[player_ind],
+                    fix_attention,
                     options
                 )
 
@@ -207,6 +210,7 @@ function innerloop_for_player!(
     calc_policy_functions,
     interp_policy_functions,
     prev_optimal,
+    fix_attention,
     options::SMPEOptions
 )
     prev_value_func = nothing
@@ -219,7 +223,7 @@ function innerloop_for_player!(
 
     while true
         @info "Calculating attention vector..."
-        if attention_cost(game, player_ind) > 0
+        if attention_cost(game, player_ind) > 0 && isnothing(fix_attention)
             default_state = collect(compute_default_state(game, player_ind))
             attention = calculate_attention(
                 game,
@@ -229,6 +233,9 @@ function innerloop_for_player!(
                 interp_policy_functions,
                 options
             )
+        elseif !isnothing(fix_attention)
+            default_state = collect(compute_default_state(game, player_ind))
+            attention = fix_attention[player_ind, :]
         else
             default_state = fill(0.0, dim_state(game))
             attention = fill(1.0, dim_state(game))

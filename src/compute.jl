@@ -9,6 +9,7 @@ mutable struct SolutionProgress
     prev_value_functions::Vector{Array{Float64}}
     prev_optimal::Vector{Bool}
     attention::Matrix{Float64}
+    prev_attention::Matrix{Float64}
     converged::Vector{Bool}
     last_player::Int
     compute_time::Float64
@@ -42,12 +43,13 @@ function compute_equilibrium(
         end
     end
     if init_variables  # No progress cache given or progress cache is empty
-        att0 = isnothing(fix_attention) ? fill(1.0, (num_players(game), dim_state(game))) : fix_attention
+        att0 = isnothing(fix_attention) ? fill(0.0, (num_players(game), dim_state(game))) : fix_attention
         progress = SolutionProgress(
-            create_init_actions(game, nodes, x0),
-            initialize_value_functions(game, nodes),
-            initialize_value_functions(game, nodes),  # It only matters that we get the shape right for now
+            create_init_actions(game, nodes, x0, att0, options),
+            initialize_value_functions(game, nodes, att0, options),
+            initialize_value_functions(game, nodes, att0, options),
             fill(isnothing(x0) ? false : true, num_players(game)),
+            att0,
             att0,
             fill(false, num_players(game)),
             0,
@@ -58,19 +60,17 @@ function compute_equilibrium(
     interp_policy_functions = Vector{Vector{SMPEInterpolation}}(undef, num_players(game))
     interp_value_functions = Vector{SMPEInterpolation}(undef, num_players(game))
     Threads.@threads for player_ind in 1:num_players(game)
-        # For first interpolatipn, we just attention to zero everywhere.
-        # This leads to the fastest initilaziation
         interp_policy_functions[player_ind] = interpolate_policy_function(
             game,
             nodes,
-            zeros(dim_rectangular_state(game)),
+            progress.attention[player_ind, :],
             progress.calc_policy_functions[player_ind],
             options
         )
         interp_value_functions[player_ind] = interpolate_value_function(
             game,
             nodes,
-            zeros(dim_rectangular_state(game)),
+            progress.attention[player_ind, :],
             progress.calc_value_functions[player_ind],
             options
         )
@@ -124,19 +124,23 @@ function compute_equilibrium(
                 )
 
                 if progress.prev_optimal[player_ind]  # At least one iteration done before => can check convergence
-                    vf_norm = value_function_norm(
-                        game,
-                        progress.calc_value_functions[player_ind],
-                        progress.prev_value_functions[player_ind]
-                    )
-                    @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
-                    if vf_norm < options.eps_outer
-                        progress.converged[player_ind] = true
+                    if all(progress.attention[player_ind, :] .== progress.prev_attention[player_ind, :])
+                        vf_norm = value_function_norm(
+                            game,
+                            progress.calc_value_functions[player_ind],
+                            progress.prev_value_functions[player_ind]
+                        )
+                        @info "Outer loop step for player $(player_ind), step = $(vf_norm)"
+                        if vf_norm < options.eps_outer
+                            progress.converged[player_ind] = true
+                        else
+                            # The actions for one player have changed. As a
+                            # result, we can no longer assume that the
+                            # actions calculated for other players are optimal.
+                            progress.converged = fill(false, num_players(game))
+                        end
                     else
-                        # The actions for one player have changed. As a
-                        # result, we can no longer assume that the
-                        # actions calculated for other players are optimal.
-                        progress.converged = fill(false, num_players(game))
+                        @info "Outer loop: attention changed for $(player_ind)"
                     end
                 end
 
@@ -146,6 +150,7 @@ function compute_equilibrium(
                 progress.prev_optimal[player_ind] = true
 
                 progress.prev_value_functions[player_ind] = progress.calc_value_functions[player_ind]
+                progress.prev_attention[player_ind, :] = progress.attention[player_ind, :]
 
                 progress.last_player = player_ind < num_players(game) ? player_ind : 0
             end
@@ -164,10 +169,13 @@ function compute_equilibrium(
     )
 end
 
-function create_init_actions(game::DynamicGame, nodes, x0)
+function create_init_actions(game::DynamicGame, nodes, x0, attention, options::SMPEOptions)
     if isnothing(x0)
         return map(
-            i -> zeros((length(s) for s in nodes)..., num_actions(game, i)),
+            i -> zeros(
+                (att > options.attention_cutoff ? length(s) : 1 for (s, att)
+                in zip(nodes, attention[i, :])
+            )..., num_actions(game, i)),
             1:num_players(game)
         )
     else
@@ -198,8 +206,11 @@ function create_init_actions(game::DynamicGame, nodes, x0)
     end
 end
 
-initialize_value_functions(game::DynamicGame, nodes) = [
-    zeros((length(node_base) for node_base in nodes)...)
+initialize_value_functions(game::DynamicGame, nodes, attention, options::SMPEOptions) = [
+    zeros(
+        (att > options.attention_cutoff ? length(node_base) : 1
+        for (node_base, att) in zip(nodes, attention)
+        )...)
     for i in 1:num_players(game)]
 
 function innerloop_for_player!(
@@ -214,6 +225,7 @@ function innerloop_for_player!(
     options::SMPEOptions
 )
     prev_value_func = nothing
+    prev_attention = nothing
     calc_value_func = nothing
     attention = nothing
     interp_value_func = nothing
@@ -287,15 +299,20 @@ function innerloop_for_player!(
         )
 
         if !isnothing(prev_value_func)
-            vf_norm = value_function_norm(game, calc_value_func, prev_value_func)
-            @info "Step complete, norm = $(vf_norm)"
-            if vf_norm < options.eps_inner
-                @info "Inner loop converged"
-                break
+            if all(attention .== prev_attention)
+                vf_norm = value_function_norm(game, calc_value_func, prev_value_func)
+                @info "Step complete, norm = $(vf_norm)"
+                if vf_norm < options.eps_inner
+                    @info "Inner loop converged"
+                    break
+                end
+            else
+                @info "Step complete, attention changed"
             end
         end
 
         prev_value_func = copy(calc_value_func)
+        prev_attention = copy(attention)
         # After one iteration, can use prev optimum as starting point
         prev_optimal = true
     end

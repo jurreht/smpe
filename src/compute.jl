@@ -206,12 +206,13 @@ function create_init_actions(game::DynamicGame, nodes, x0, attention, options::S
     end
 end
 
-initialize_value_functions(game::DynamicGame, nodes, attention, options::SMPEOptions) = [
-    zeros(
-        (att > options.attention_cutoff ? length(node_base) : 1
-        for (node_base, att) in zip(nodes, attention)
-        )...)
-    for i in 1:num_players(game)]
+initialize_value_functions(game::DynamicGame, nodes, attention, options::SMPEOptions) = map(
+    i -> zeros(
+        (att > options.attention_cutoff ? length(s) : 1 for (s, att)
+        in zip(nodes, attention[i, :])
+    )...),
+    1:num_players(game)
+)
 
 function innerloop_for_player!(
     game::DynamicGame,

@@ -8,6 +8,7 @@
     state_sim_min_sims::Integer = 100
     integration_rel_tol::Real = 1e-1
     integration_abs_tol::Real = 1e-3
+    integration_max_evals::Int64 = 1e6
     attention_cutoff::Real = 1e-4
     use_static_attention::Bool = false
     att_cost_bracket_step::Float64 = 5e-3
@@ -325,7 +326,8 @@ function integrate_fn_over_stochastic_states(
         length(stochastic_nodes),
         dim_fn;
         rtol=options.integration_rel_tol,
-        atol=options.integration_abs_tol
+        atol=options.integration_abs_tol,
+        maxevals=options.integration_max_evals
     )
     if integral.fail > 0
         throw("Integration of future states failed")

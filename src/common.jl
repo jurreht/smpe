@@ -236,7 +236,6 @@ function value_function_gradient_for_actions(
         actions
     )
     next_vf_grad = value_function_gradient_for_state(game, interp_value_function, next_state, options)
-    Interpolations.gradient(interp_value_function, state...)
     return transpose(next_state_jac) * next_vf_grad
 end
 

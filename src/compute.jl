@@ -81,16 +81,22 @@ function compute_equilibrium(
     # is wasted effort
     if !isnothing(x0) && progress.compute_time == 0
         @info "Initial contraction mapping"
-        for i in 1:num_players(game)
+        for player_ind in 1:num_players(game)
             progress.compute_time += @elapsed begin
-                progress.calc_value_functions[i], interp_value_functions[i] = calculate_value_function(
+                default_state = compute_default_state(game, player_ind)
+                default_node = transform_state_back(game, default_state)
+                relevant_nodes = Iterators.product((
+                    progress.attention[player_ind, i] > options.attention_cutoff ? nodes[i] : [default_node[i]]
+                    for i in 1:dim_rectangular_state(game)
+                )...)
+                progress.calc_value_functions[player_ind], interp_value_functions[player_ind] = calculate_value_function(
                     game,
                     nodes,
-                    Iterators.product(nodes...),
-                    fill(1.0, dim_state(game)),
-                    zeros(dim_state(game)),  # Irrelvant given attention = 1
-                    i,
-                    interp_value_functions[i],
+                    relevant_nodes,
+                    progress.attention[player_ind, :],
+                    default_state,
+                    player_ind,
+                    interp_value_functions[player_ind],
                     interp_policy_functions,
                     options
                 )

@@ -622,7 +622,8 @@ function maximize_payoff(
     x0,
     bounds,
     options::SMPEOptions,
-    dynamic
+    dynamic,
+    retry_on_error=true
 )
     lb = [isnothing(bounds[i][1]) ? -Inf : bounds[i][1] for i in eachindex(bounds)]
     ub = [isnothing(bounds[i][2]) ? Inf : bounds[i][2] for i in eachindex(bounds)]
@@ -662,8 +663,44 @@ function maximize_payoff(
             options.optim_options
         )
     end
-    if !Optim.converged(results) || !all([isfinite(x) for x in Optim.minimizer(results)])
-        throw(OptimizationConvergenceError(results))
+    if !retry_on_error
+        # Return full minimizer results to parent call
+        return results
+    end
+    if retry_on_error && (!Optim.converged(results) || !all([isfinite(x) for x in Optim.minimizer(results)]))
+        # Retry at different, random, starting values
+        n_tries = 25
+        retry_results = Vector{Optim.OptimizationResults}(undef, n_tries)
+        x0_dists = [truncated(Normal(), l, u) for (l, u) in zip(lb, ub)]
+        for i in eachindex(retry_results)
+            x0_try = [rand(d) for d in x0_dists]
+            retry_results[i] = maximize_payoff(
+                game,
+                state,
+                player_ind,
+                interp_value_function,
+                actions_others,
+                x0_try,
+                bounds,
+                options,
+                dynamic,
+                false
+            )
+        end
+        best_result = nothing
+        for retry in retry_results
+            if (
+                Optim.converged(retry) && all([isfinite(x) for x in Optim.minimizer(retry)])
+            ) && (
+                isnothing(best_result) || Optim.minimum(retry) < Optim.minimum(best_result)
+            )
+                best_result = retry
+            end
+        end
+        if isnothing(best_result)
+            throw(OptimizationConvergenceError(results))
+        end
+        return Optim.minimizer(best_result)
     end
     return Optim.minimizer(results)
 end

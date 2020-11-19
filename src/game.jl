@@ -10,6 +10,7 @@ discount_factor(g::DynamicGame, player_ind) = throw("Concrete subtypes of Dynami
 static_payoff(g::DynamicGame, state, player_ind, actions_player, actions_others) = throw("Concrete subtypes of DynamicGame must implement static_payoff()")
 compute_next_state(g::DynamicGame, state, player_ind, actions, actions_others) = throw("Concrete subtypes of DynamicGame must implement compute_next_state()")
 attention_cost(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement attention_cost()")
+attention_number(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement attention_number()")
 compute_default_state(g::DynamicGame, player_ind) = throw("Concrete subtypes of DynamicGame must implement compute_default_state() when attention costs are positive")
 
 # Optional overrides

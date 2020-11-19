@@ -15,13 +15,16 @@ mutable struct SolutionProgress
     compute_time::Float64
 end
 
+@enum AttentionType full fixed cost number
+
 function compute_equilibrium(
     game::DynamicGame,
     nodes::Union{AbstractRange, Vector{<:AbstractRange}};
     x0=nothing,
     options::SMPEOptions=DEFAULT_OPTIONS,
     progress_cache::Union{IO, AbstractString, Nothing}=nothing,
-    fix_attention::Union{<:AbstractMatrix{Float64}, Nothing}=nothing
+    attention_type::AttentionType=full,
+    att0::Union{<:AbstractMatrix{Float64}, Nothing}=nothing
 )
     if isa(nodes, AbstractRange)
         nodes = [nodes]
@@ -43,7 +46,15 @@ function compute_equilibrium(
         end
     end
     if init_variables  # No progress cache given or progress cache is empty
-        att0 = isnothing(fix_attention) ? fill(0.0, (num_players(game), dim_state(game))) : fix_attention
+        if attention_type == full
+            att0 = fill(1., (num_players(game), dim_state(game)))
+        elseif attention_type == fixed
+            if isnothing(att0)
+                throw("Provide att0 with fixed attention type")
+            end
+        elseif isnothing(att0)
+            att0 = fill(0.0, (num_players(game), dim_state(game)))
+        end
         progress = SolutionProgress(
             create_init_actions(game, nodes, x0, att0, options),
             initialize_value_functions(game, nodes, att0, options),
@@ -125,7 +136,8 @@ function compute_equilibrium(
                     progress.calc_policy_functions,
                     interp_policy_functions,
                     progress.prev_optimal[player_ind],
-                    fix_attention,
+                    attention_type,
+                    progress.attention[player_ind, :],
                     options
                 )
 
@@ -228,7 +240,8 @@ function innerloop_for_player!(
     calc_policy_functions,
     interp_policy_functions,
     prev_optimal,
-    fix_attention,
+    attention_type::AttentionType,
+    current_attention,
     options::SMPEOptions
 )
     prev_value_func = nothing
@@ -242,22 +255,24 @@ function innerloop_for_player!(
 
     while true
         @info "Calculating attention vector..."
-        if attention_cost(game, player_ind) > 0 && isnothing(fix_attention)
-            default_state = collect(compute_default_state(game, player_ind))
+
+        default_state = (
+            attention_type != full
+            ? collect(compute_default_state(game, player_ind))
+            : fill(0.0, dim_state(game))
+        )
+        if attention_type in (cost, number)
             attention = calculate_attention(
                 game,
                 default_state,
                 player_ind,
                 interp_value_function,
                 interp_policy_functions,
+                attention_type,
                 options
             )
-        elseif !isnothing(fix_attention)
-            default_state = collect(compute_default_state(game, player_ind))
-            attention = fix_attention[player_ind, :]
         else
-            default_state = fill(0.0, dim_state(game))
-            attention = fill(1.0, dim_state(game))
+            attention = current_attention
         end
         @debug "Attention vector = $(attention)"
 
@@ -333,6 +348,7 @@ function calculate_attention(
     player_ind,
     interp_value_function,
     interp_policy_funcs,
+    attention_type::AttentionType,
     options::SMPEOptions
 )
     @debug "Default state $(default_state)"
@@ -344,8 +360,17 @@ function calculate_attention(
         interp_policy_funcs,
         options
     )
-    att_cost = attention_cost(game, player_ind)
-    return [attention_function(game, b / att_cost) for b in benefit_attention]
+    if attention_type == cost
+        att_cost = attention_cost(game, player_ind)
+        return [attention_function(game, b / att_cost) for b in benefit_attention]
+    elseif attention_type == number
+        att_no = attention_number(game, player_ind)
+        most_att = sort(keys(benefit_attention); by=k -> benefit_attention[k], rev=true)
+        attention = fill(false, length(benefit_attention))
+        attention[most_att[1:att_no]] .= true
+        return attention
+    end
+    throw("Invalid attention type")
 end
 
 function static_benefit_attention(

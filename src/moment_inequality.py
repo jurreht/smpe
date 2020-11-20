@@ -99,7 +99,7 @@ def _bootstrap_quantile(W, W_mean, beta, B):
     test_stat = np.zeros(B)
     for b in range(B):
         # Make bootstrap sample
-        W_bs = W[np.random.randint(n, size=B)]
+        W_bs = W[np.random.randint(n, size=n)]
 
         t_stats = np.sqrt(n) * (W_mean - W_bs.mean(axis=0)) / np.std(W_bs, axis=0)
         test_stat[b] = np.max(t_stats)
@@ -114,7 +114,7 @@ def _bootstrap_test_stats(W, W_mean, alpha, beta, B, max_mu, stat_fun):
     test_stat = np.zeros(B)
     for b in range(B):
         # Make bootstrap sample
-        W_bs = W[np.random.randint(n, size=B)]
+        W_bs = W[np.random.randint(n, size=n)]
 
         # W_bs_mean = np.mean(W_bs, axis=0)
         test_stat[b] = stat_fun(W_bs - W_mean + lambda_)

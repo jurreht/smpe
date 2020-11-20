@@ -12,6 +12,7 @@
     attention_cutoff::Real = 1e-4
     use_static_attention::Bool = false
     att_cost_bracket_step::Float64 = 5e-3
+    interpolation_type::Interpolations.DegreeBC=Cubic(Line(OnGrid()))
 end
 
 DEFAULT_OPTIONS = SMPEOptions()
@@ -122,8 +123,8 @@ interpolate_policy_function(game::DynamicGame, states, attention, calc_policy_fu
 ]
 
 
-function interpolate_function(game::DynamicGame, states, vals)
-    itp = interpolate(vals, BSpline(Cubic(Line(OnGrid()))))
+function interpolate_function(game::DynamicGame, states, vals, options::SMPEOptions=DEFAULT_OPTIONS)
+    itp = interpolate(vals, BSpline(options.interpolation_type))
     # We allow extrapolation to prevent errors when the due to floating point
     # rounding we are just outside the grid. It is not advised to try to
     # extrapolate much beyond that
@@ -142,7 +143,7 @@ function interpolate_function(game::DynamicGame, states, attention, vals, option
             vals = vals[(att ? Colon() : 1 for att in notsparse)...]
         end
 
-        itp = interpolate(vals, BSpline(Cubic(Line(OnGrid()))))
+        itp = interpolate(vals, BSpline(options.interpolation_type))
         etp = extrapolate(Interpolations.scale(itp, states...), Interpolations.Flat())
         return TransformedInterpolation(SparseInterpolation(etp, notsparse, bounds), game)
     else

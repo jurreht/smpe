@@ -591,7 +591,17 @@ function calculate_derivative_actions_state(
         hess_value_actions[:, :] = term1
     end
 
-    return -1 * term1 \ term2
+    try
+        return -1 * term1 \ term2
+    catch e
+        if isa(e, SingularException)
+            @info "Hessian matrix singular or ill-conditioned, using Moore-Penrose pseudoinverse"
+            # rtol recommended by Julia documentation for ill-conditioned matrices
+            return -1 * pinv(term1, rtol = sqrt(eps(real(float(one(eltype(term1))))))) * term2
+        else
+            rethrow(e)
+        end
+    end
 end
 
 function calculate_optimal_actions(

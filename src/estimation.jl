@@ -87,5 +87,11 @@ function test_moments(moments, att_cost, attention, alpha, options::SMPEOptions)
             end
         end
     end
-    return moment_inequality.test_inequalities(moments_with_att_cost, alpha, .1 * alpha, p_value=true)
+    moments_mean = mean(moments_with_att_cost; dims=1)[1, :]
+    moments_sd = std(moments_with_att_cost; dims=1)[1, :]
+    if any(moments_mean[moments_sd .<= 1e-15] .> 0)
+        return true
+    end
+    moments_with_att_cost = moments_with_att_cost[:, moments_sd .> 1e-15]
+    return moment_inequality.test_inequalities(moments_with_att_cost, alpha, .1 * alpha)
 end

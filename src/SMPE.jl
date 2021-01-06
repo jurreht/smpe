@@ -8,7 +8,6 @@ using Interpolations
 using JuliennedArrays
 using LinearAlgebra
 using Optim
-using PyCall
 using Random
 using Serialization
 using Statistics
@@ -30,13 +29,6 @@ end
 const State = Vector{Float64}
 const Actions = Vector{Vector{Float64}}
 const EquilibriumPath = Vector{Tuple{State, Actions}}
-
-const moment_inequality = PyNULL()
-
-function __init__()
-    pushfirst!(PyVector(pyimport("sys")."path"), @__DIR__)
-    copy!(moment_inequality, pyimport("moment_inequality"))
-end
 
 include("game.jl")
 include("common.jl")
